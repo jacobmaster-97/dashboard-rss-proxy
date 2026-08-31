@@ -1,31 +1,1613 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-HK">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>個人資訊看板</title>
-  <style>html,body{margin:0;background:#0f172a;color:#e2e8f0;font-family:system-ui,sans-serif}#status{min-height:100vh;display:grid;place-items:center;text-align:center;padding:24px}.spinner{width:34px;height:34px;border:3px solid #334155;border-top-color:#3b82f6;border-radius:50%;animation:s 1s linear infinite;margin:0 auto 14px}@keyframes s{to{transform:rotate(360deg)}}</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>個人資訊儀表板</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <!-- QRCode.js for generating pairing QR code -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0f172a; /* Slate 900 */
+            color: #f8fafc; /* Slate 50 */
+            overflow-x: hidden;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+        
+        /* 隱藏滾動條但保留滾動功能 */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+        
+        /* 網格卡片樣式 - 霓虹邊框與磨砂玻璃效果 */
+        .grid-card {
+            background: rgba(30, 41, 59, 0.75); /* Slate 800 with opacity */
+            backdrop-filter: blur(12px);
+            border: 2px solid #2563eb; /* Vibrant Blue border */
+            border-radius: 1.5rem;
+            padding: 1.25rem;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+            overflow: hidden;
+        }
+        
+        .grid-card:hover {
+            border-color: #3b82f6; 
+            box-shadow: 0 0 20px rgba(59, 130, 246, 0.25);
+        }
+
+        .card-header {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: #f8fafc; 
+            margin-bottom: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            border-bottom: 1px solid rgba(71, 85, 105, 0.5);
+            padding-bottom: 0.65rem;
+            shrink: 0;
+        }
+
+        .modal-backdrop { backdrop-filter: blur(6px); }
+    </style>
 </head>
-<body>
-<div id="status"><div><div class="spinner"></div><strong>載入個人資訊看板…</strong><div style="margin-top:8px;font-size:12px;color:#94a3b8">RSS Proxy 已連接・每 30 分鐘更新</div></div></div>
-<script>
-(async()=>{
-  try{
-    const paths=['.pages/dashboard.part0.b64','.pages/dashboard.part1.b64','.pages/dashboard.part2.b64'];
-    const parts=await Promise.all(paths.map(p=>fetch(p+'?v=20260831',{cache:'no-store'}).then(r=>{if(!r.ok)throw new Error(p+' '+r.status);return r.text()})));
-    const b64=parts.join('').replace(/\s+/g,'');
-    const raw=atob(b64);
-    const bytes=new Uint8Array(raw.length);
-    for(let i=0;i<raw.length;i++) bytes[i]=raw.charCodeAt(i);
-    if(!('DecompressionStream' in window)) throw new Error('Browser does not support gzip decompression');
-    const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
-    const html=await new Response(stream).text();
-    document.open();document.write(html);document.close();
-  }catch(err){
-    console.error(err);
-    document.getElementById('status').innerHTML='<div><strong>資訊看板載入失敗</strong><div style="margin-top:10px;color:#94a3b8;font-size:13px">請重新整理頁面；如持續出現，請檢查 GitHub Pages 發佈設定。</div></div>';
-  }
-})();
-</script>
+<body class="p-4 md:p-6 lg:p-8">
+
+    <!-- 頂部導航 / 控制列 -->
+    <header class="flex justify-between items-center mb-5 px-2 shrink-0">
+        <h1 class="text-2xl font-bold tracking-tight text-white flex items-center gap-2.5">
+            <i class="fa-solid fa-table-cells-large text-blue-500"></i> 個人資訊看板
+        </h1>
+        <div class="flex items-center gap-3">
+            <!-- 雲端同步狀態標籤 -->
+            <div id="cloud-sync-status" class="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-xs text-slate-400" title="雲端同步狀態">
+                <span class="w-2 h-2 rounded-full bg-slate-500 transition-colors" id="sync-dot"></span>
+                <span id="sync-status-text">本機模式</span>
+            </div>
+            
+            <button onclick="fetchAllData()" class="p-2.5 rounded-full bg-slate-800 hover:bg-blue-600 border border-slate-700 transition-colors text-slate-300 hover:text-white group" title="手動重新整理">
+                <i class="fa-solid fa-rotate-right group-active:animate-spin" id="global-refresh-icon"></i>
+            </button>
+            <button onclick="toggleFullScreen()" class="p-2.5 rounded-full bg-slate-800 hover:bg-blue-600 border border-slate-700 transition-colors text-slate-300 hover:text-white" title="全螢幕模式">
+                <i class="fa-solid fa-expand"></i>
+            </button>
+            <button onclick="openSettingsModal()" class="p-2.5 rounded-full bg-slate-800 hover:bg-blue-600 border border-slate-700 transition-colors text-slate-300 hover:text-white flex items-center gap-2" title="設定">
+                <i class="fa-solid fa-gear"></i> <span class="hidden sm:inline text-sm font-medium">系統設定</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- 主要網格佈局 -->
+    <main class="flex-grow flex flex-col gap-5">
+        
+        <!-- 上方 2 欄區域 (時間 | 鐵路到站) -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            
+            <!-- 1. 時間與日期 -->
+            <section class="grid-card justify-center items-center relative min-h-[240px] group">
+                <div class="absolute -right-10 -top-10 w-36 h-36 bg-blue-500/10 rounded-full blur-2xl group-hover:bg-blue-500/20 transition-all"></div>
+                <div class="text-center z-10 w-full">
+                    <div id="clock-date" class="text-lg font-medium text-blue-300 mb-1 tracking-wide">載入中...</div>
+                    <div id="clock-time" class="text-6xl lg:text-7xl font-bold text-white tracking-tighter drop-shadow-lg tabular-nums">--:--</div>
+                    <div class="flex justify-center mt-3 gap-2 text-xs text-slate-400 font-mono">
+                        <span class="bg-slate-900/60 px-2.5 py-1 rounded-md border border-slate-700/50">HKT (UTC+8)</span>
+                        <span id="clock-sec" class="bg-slate-900/60 px-2.5 py-1 rounded-md border border-slate-700/50 w-9 font-bold text-blue-400">--</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 2. 鐵路到站時間 -->
+            <section class="grid-card min-h-[240px] h-[260px]">
+                <div class="card-header justify-between">
+                    <div class="flex items-center gap-2"><i class="fa-solid fa-train text-amber-400"></i> 鐵路到站時間</div>
+                    <span id="eta-timer" class="text-[10px] font-mono px-2 py-0.5 bg-slate-900 rounded text-slate-400 border border-slate-700">15s 後刷新</span>
+                </div>
+                
+                <div class="bg-slate-900/50 rounded-xl border border-slate-700/60 p-3 flex-grow flex flex-col justify-between overflow-y-auto">
+                    <div class="text-xs font-bold text-blue-300 mb-2 flex justify-between items-center">
+                        <span><i class="fa-solid fa-location-dot text-rose-400 mr-1"></i> <span id="mtr-line-label">--</span> 綫 - <span id="mtr-sta-label">--</span> 站</span>
+                        <button onclick="fetchTransportETA()" class="hover:text-white text-slate-400 transition-colors" title="更新港鐵"><i class="fa-solid fa-rotate"></i></button>
+                    </div>
+                    
+                    <div id="mtr-eta-container" class="flex flex-col gap-2 my-auto">
+                        <div class="text-center py-4 text-slate-500 text-sm"><i class="fa-solid fa-spinner fa-spin mr-2"></i>載入港鐵數據中...</div>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+
+        <!-- 中間區域 (股票資訊 | 足球比分 | 即時新聞) -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+            
+            <!-- 股票資訊 -->
+            <section class="grid-card min-h-[300px] flex flex-col">
+                <div class="card-header justify-between">
+                    <div class="flex items-center gap-2"><i class="fa-solid fa-chart-line text-emerald-400"></i> 股票資訊</div>
+                    <span id="stock-source-badge" class="text-[10px] px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-400 flex items-center gap-1"></span>
+                </div>
+                
+                <div id="stock-list-container" class="flex flex-col gap-2.5 overflow-y-auto pr-1 flex-grow max-h-[320px]">
+                    <div class="text-center py-8 text-slate-500 text-sm"><i class="fa-solid fa-spinner fa-spin mr-2"></i>載入股票中...</div>
+                </div>
+                
+                <div class="mt-3 pt-2.5 border-t border-slate-700/50 flex justify-between items-center text-xs text-slate-500 shrink-0">
+                    <span id="stock-last-update">等待更新...</span>
+                    <button onclick="fetchStockData()" class="hover:text-white transition-colors"><i class="fa-solid fa-rotate"></i></button>
+                </div>
+            </section>
+
+            <!-- 最新足球比賽比分 -->
+            <section class="grid-card min-h-[300px] flex flex-col">
+                <div class="card-header justify-between">
+                    <div class="flex items-center gap-2"><i class="fa-solid fa-futbol text-emerald-400"></i> 最新足球賽事</div>
+                    <button onclick="fetchFootballScores()" class="hover:text-white text-slate-400 transition-colors" title="重新整理賽事">
+                        <i class="fa-solid fa-rotate"></i>
+                    </button>
+                </div>
+
+                <div id="football-scores-container" class="flex flex-col gap-2.5 overflow-y-auto pr-1 flex-grow max-h-[320px]">
+                    <div class="text-center py-8 text-slate-500 text-sm"><i class="fa-solid fa-spinner fa-spin mr-2"></i>載入賽事數據中...</div>
+                </div>
+            </section>
+
+            <!-- 即時新聞 -->
+            <section class="grid-card min-h-[300px] flex flex-col">
+                <div class="card-header justify-between">
+                    <div class="flex items-center gap-2">
+                        <i class="fa-regular fa-newspaper text-sky-400"></i>
+                        <span>即時新聞</span>
+                        <!-- 新聞類別切換標籤 (本地 / 體育) -->
+                        <div class="flex items-center gap-1 bg-slate-900/90 p-0.5 rounded-lg border border-slate-700/80 ml-1">
+                            <button id="tab-btn-local" onclick="switchNewsCategory('local')" class="px-2 py-0.5 text-xs rounded-md transition-colors font-medium bg-blue-600 text-white shadow-sm">本地</button>
+                            <button id="tab-btn-sports" onclick="switchNewsCategory('sports')" class="px-2 py-0.5 text-xs rounded-md transition-colors font-medium text-slate-400 hover:text-white">體育</button>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span id="news-update-time" class="text-[10px] text-slate-400 font-mono">--:-- 更新</span>
+                        <button onclick="fetchLiveNews()" class="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs transition-colors">
+                            <i class="fa-solid fa-rotate" id="news-refresh-icon"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div id="news-list-container" class="flex flex-col gap-3 overflow-y-auto pr-1.5 flex-grow max-h-[320px]">
+                    <div class="text-center py-12 text-slate-500 text-sm"><i class="fa-solid fa-spinner fa-spin mr-2"></i>載入最新新聞中...</div>
+                </div>
+            </section>
+
+        </div>
+
+        <!-- 底部全寬區域 (天氣資訊) -->
+        <div class="w-full shrink-0">
+            <section class="grid-card relative overflow-hidden group py-4 px-6 flex flex-col md:flex-row items-center justify-between gap-6">
+                <div class="absolute inset-0 bg-gradient-to-r from-sky-900/20 via-slate-900/50 to-blue-900/20 z-0"></div>
+                
+                <div class="flex items-center gap-3 z-10 w-full md:w-auto">
+                    <i class="fa-solid fa-cloud-sun-rain text-sky-400 text-2xl"></i>
+                    <h2 class="text-xl font-bold text-white m-0 tracking-wide">天氣資訊</h2>
+                </div>
+                
+                <div class="flex flex-col sm:flex-row items-center gap-6 z-10 w-full justify-around md:justify-end">
+                    <div class="flex items-center gap-4">
+                        <div id="weather-icon-container" class="text-4xl filter drop-shadow-md">🌤️</div>
+                        <div class="flex flex-col items-start">
+                            <div class="flex items-baseline gap-1">
+                                <span id="weather-temp" class="text-3xl font-bold text-white tracking-tighter">--</span>
+                                <span class="text-lg text-slate-400">°C</span>
+                            </div>
+                            <div id="weather-location" class="text-xs text-sky-300 font-medium flex items-center gap-1 cursor-pointer hover:text-sky-200" onclick="requestGPSLocation()" title="點擊重新定位">
+                                <i class="fa-solid fa-location-crosshairs"></i> 定位中...
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="h-10 w-px bg-slate-700 hidden sm:block"></div>
+                    
+                    <div class="flex flex-wrap justify-center gap-4 text-sm bg-slate-900/50 px-4 py-2 rounded-xl border border-slate-700/50">
+                        <div class="flex items-center gap-2 text-slate-300">
+                            <i class="fa-solid fa-droplet text-blue-400"></i> 濕度 <span id="weather-humidity" class="font-bold text-white">--%</span>
+                        </div>
+                        <div class="flex items-center gap-2 text-slate-300">
+                            <i class="fa-solid fa-sun text-amber-400"></i> UV <span id="weather-uv" class="font-bold text-white">--</span>
+                        </div>
+                        <div class="flex items-center gap-2 text-slate-300">
+                            <i class="fa-solid fa-triangle-exclamation text-rose-400"></i> <span id="weather-warning" class="text-rose-300">無警告</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+    </main>
+
+    <!-- 模態框：API / 系統設定 -->
+    <div id="settings-modal" class="fixed inset-0 bg-slate-900/80 modal-backdrop z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl flex flex-col max-h-[90vh]">
+            <div class="p-5 border-b border-slate-700 flex justify-between items-center">
+                <h2 class="text-xl font-bold text-white"><i class="fa-solid fa-sliders text-blue-400 mr-2"></i>系統設定</h2>
+                <button onclick="closeSettingsModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button>
+            </div>
+            
+            <div class="p-5 overflow-y-auto flex-grow space-y-5">
+                
+                <!-- 跨裝置雲端同步設定 -->
+                <div class="bg-blue-950/40 p-4 rounded-xl border border-blue-500/30">
+                    <h3 class="text-sm font-semibold text-blue-300 mb-2 flex items-center justify-between">
+                        <span class="flex items-center gap-2"><i class="fa-solid fa-cloud text-blue-400"></i> 跨裝置雲端同步</span>
+                        <span id="modal-sync-badge" class="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-400 font-mono">未同步</span>
+                    </h3>
+                    <p class="text-xs text-slate-400 mb-3">在不同裝置輸入相同的「同步碼」，即可自動同步設定。</p>
+                    
+                    <div class="flex gap-2 mb-3">
+                        <input type="text" id="setting-sync-id" placeholder="例如: MY-DASH-88" class="flex-grow bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-white font-mono focus:border-blue-500 focus:outline-none uppercase">
+                        <button type="button" onclick="generateRandomSyncId()" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs text-slate-300 shrink-0" title="隨機產生同步碼">
+                            <i class="fa-solid fa-dice"></i> 隨機
+                        </button>
+                    </div>
+
+                    <div class="flex flex-wrap gap-2">
+                        <button type="button" onclick="toggleQRCodeDisplay()" class="flex-1 py-2 px-3 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 rounded-lg text-xs text-blue-300 transition-colors flex items-center justify-center gap-1.5 font-medium">
+                            <i class="fa-solid fa-qrcode"></i> 手機掃描配對
+                        </button>
+                        <button type="button" onclick="copyShareLink()" class="flex-1 py-2 px-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs text-slate-300 transition-colors flex items-center justify-center gap-1.5">
+                            <i class="fa-solid fa-link"></i> 複製配對連結
+                        </button>
+                    </div>
+
+                    <!-- QR Code 顯示區域 -->
+                    <div id="qrcode-wrapper" class="hidden mt-3 p-4 bg-white rounded-xl flex flex-col items-center justify-center gap-2 transition-all">
+                        <div id="qrcode-container"></div>
+                        <p class="text-xs text-slate-800 font-medium text-center m-0">用手機相機掃描上方 QR Code，即可直接開啟並同步！</p>
+                    </div>
+                </div>
+
+                <!-- 港鐵 MTR 設定 -->
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-300 mb-2 flex items-center gap-2"><i class="fa-solid fa-train text-amber-500"></i> 港鐵 MTR 到站設定</h3>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs text-slate-400 mb-1">路線</label>
+                            <select id="setting-mtr-line" onchange="updateStationOptions(this.value)" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-white focus:border-blue-500 focus:outline-none">
+                                <option value="TWL">荃灣綫 (TWL)</option>
+                                <option value="KTL">觀塘綫 (KTL)</option>
+                                <option value="ISL">港島綫 (ISL)</option>
+                                <option value="EAL">東鐵綫 (EAL)</option>
+                                <option value="TML">屯馬綫 (TML)</option>
+                                <option value="TCL">東涌綫 (TCL)</option>
+                                <option value="TKL">將軍澳綫 (TKL)</option>
+                                <option value="AEL">機場快綫 (AEL)</option>
+                                <option value="SIL">南港島綫 (SIL)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs text-slate-400 mb-1">車站</label>
+                            <select id="setting-mtr-sta" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-white uppercase focus:border-blue-500 focus:outline-none">
+                                <!-- 車站選項將由 JavaScript 自動載入 -->
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 足球賽事顯示設定 -->
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-300 mb-2 flex items-center justify-between">
+                        <span class="flex items-center gap-2"><i class="fa-solid fa-futbol text-emerald-400"></i> 足球賽事顯示設定 (ESPN API)</span>
+                        <span id="league-count-badge" class="text-[10px] px-2 py-0.5 rounded bg-slate-900 text-slate-400 font-mono">已選 0/10</span>
+                    </h3>
+                    <p class="text-xs text-slate-400 mb-2">直接接入 ESPN 官方 API (免 API Key)，點選關注的聯賽：</p>
+                    
+                    <div class="flex gap-2 mb-2.5">
+                        <button type="button" onclick="clearLeagueSelection()" class="px-2.5 py-1 bg-slate-900 hover:bg-slate-700 border border-slate-700 rounded text-[11px] text-slate-300 transition-colors">
+                            <i class="fa-solid fa-circle-xmark mr-1"></i>清空選擇
+                        </button>
+                        <button type="button" onclick="resetFootballLeagues()" class="px-2.5 py-1 bg-emerald-950/60 hover:bg-emerald-900/80 border border-emerald-700/60 rounded text-[11px] text-emerald-300 transition-colors">
+                            <i class="fa-solid fa-rotate-left mr-1"></i>重置為五大聯賽與歐聯
+                        </button>
+                    </div>
+
+                    <div id="league-chips-container" class="flex flex-wrap gap-1.5 mb-2.5">
+                        <!-- 選項按鈕將由 JavaScript 動態生成 -->
+                    </div>
+
+                    <div id="league-warning-msg" class="hidden text-xs text-rose-400 mb-2 font-medium flex items-center gap-1">
+                        <i class="fa-solid fa-circle-exclamation"></i> 最多只能選擇 10 個比賽項目！
+                    </div>
+
+                    <div class="flex gap-2">
+                        <input type="text" id="setting-custom-league" placeholder="新增 ESPN 聯賽 Slug (如: chn.1, arg.1)" class="flex-grow bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white focus:border-blue-500 focus:outline-none font-mono">
+                        <button type="button" onclick="addCustomLeague()" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs text-slate-300 shrink-0 flex items-center gap-1">
+                            <i class="fa-solid fa-plus"></i> 新增
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 股票設定 -->
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-300 mb-2 flex items-center gap-2"><i class="fa-solid fa-chart-line text-emerald-400"></i> 股票設定</h3>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="block text-xs text-slate-400 mb-1">Finnhub API Key (選填)</label>
+                            <input type="text" id="setting-finnhub-key" placeholder="輸入 Finnhub API Key" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white focus:border-blue-500 focus:outline-none font-mono">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-slate-400 mb-1">股票代碼 (以逗號分隔)</label>
+                            <input type="text" id="setting-stocks" placeholder="例如: MU, VTI, AAPL" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white focus:border-blue-500 focus:outline-none font-mono">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 即時新聞 RSS 設定 (支援本地與體育分開錄入) -->
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-300 mb-2 flex items-center gap-2"><i class="fa-regular fa-newspaper text-sky-400"></i> 即時新聞 RSS 設定</h3>
+                    <p class="text-xs text-slate-400 mb-2 font-normal">您可以分別設定「本地」與「體育」新聞的 RSS 網址（<b>每行一個網址</b>）：</p>
+                    
+                    <!-- 本地新聞 RSS -->
+                    <div class="space-y-1.5 mb-3">
+                        <label class="block text-xs font-semibold text-sky-300"><i class="fa-solid fa-location-dot mr-1"></i> 本地新聞 RSS 來源</label>
+                        <textarea id="setting-rss-local" rows="3" placeholder="例如:&#10;https://rthk.hk/rthk/news/rss/c_expressnews_clocal.xml" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white focus:border-blue-500 focus:outline-none font-mono resize-none leading-relaxed"></textarea>
+                        <div class="flex flex-wrap gap-1.5">
+                            <span class="text-[10px] text-slate-400 self-center">快速加入：</span>
+                            <button type="button" onclick="addRssPreset('setting-rss-local', 'https://rthk.hk/rthk/news/rss/c_expressnews_clocal.xml')" class="px-2 py-0.5 bg-slate-900 border border-slate-700 hover:border-sky-500 rounded text-[10px] text-sky-300 transition-colors">+ 港台本地</button>
+                            <button type="button" onclick="addRssPreset('setting-rss-local', 'https://feeds.bbci.co.uk/tradchinese/rss.xml')" class="px-2 py-0.5 bg-slate-900 border border-slate-700 hover:border-sky-500 rounded text-[10px] text-sky-300 transition-colors">+ BBC 中文</button>
+                        </div>
+                    </div>
+
+                    <!-- 體育新聞 RSS -->
+                    <div class="space-y-1.5">
+                        <label class="block text-xs font-semibold text-emerald-300"><i class="fa-solid fa-futbol mr-1"></i> 體育新聞 RSS 來源</label>
+                        <textarea id="setting-rss-sports" rows="3" placeholder="例如:&#10;https://www.transfermarkt.co.uk/rss/news&#10;http://newsrss.bbc.co.uk/rss/sportonline_uk_edition/football/rss.xml" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white focus:border-blue-500 focus:outline-none font-mono resize-none leading-relaxed"></textarea>
+                        <div class="flex flex-wrap gap-1.5">
+                            <span class="text-[10px] text-slate-400 self-center">快速加入：</span>
+                            <button type="button" onclick="addRssPreset('setting-rss-sports', 'https://www.transfermarkt.co.uk/rss/news')" class="px-2 py-0.5 bg-slate-900 border border-slate-700 hover:border-emerald-500 rounded text-[10px] text-emerald-300 transition-colors">+ Transfermarkt</button>
+                            <button type="button" onclick="addRssPreset('setting-rss-sports', 'http://newsrss.bbc.co.uk/rss/sportonline_uk_edition/football/rss.xml')" class="px-2 py-0.5 bg-slate-900 border border-slate-700 hover:border-emerald-500 rounded text-[10px] text-emerald-300 transition-colors">+ BBC Sport Football</button>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <div class="p-4 border-t border-slate-700 flex justify-end gap-3 shrink-0">
+                <button type="button" onclick="closeSettingsModal()" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-xl text-sm transition-colors">取消</button>
+                <button type="button" onclick="saveSettings()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-xl text-sm transition-colors">儲存變更</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase 雲端同步模組 -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-dashboard-app';
+        let db = null;
+        let auth = null;
+        let unsubscribeSync = null;
+
+        let firebaseConfig = null;
+        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+            try { 
+                if (typeof __firebase_config === 'string' && __firebase_config.trim()) {
+                    firebaseConfig = JSON.parse(__firebase_config);
+                } else if (typeof __firebase_config === 'object') {
+                    firebaseConfig = __firebase_config;
+                }
+            } catch(e) {
+                console.warn("Firebase config parse skipped:", e);
+            }
+        }
+
+        if (firebaseConfig) {
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+
+            const initAuth = async () => {
+                try {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } catch(e) {
+                    try { await signInAnonymously(auth); } catch(err){}
+                }
+            };
+
+            initAuth().then(() => {
+                window.cloudSyncReady = true;
+                if (window.onCloudReady) window.onCloudReady();
+            });
+        }
+
+        window.cloudSyncManager = {
+            async pushData(syncId, data) {
+                if (!db || !auth || !auth.currentUser || !syncId) return;
+                try {
+                    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'dashboards', syncId.toLowerCase());
+                    await setDoc(docRef, { ...data, updatedAt: Date.now() }, { merge: true });
+                    window.updateSyncBadgeStatus(true);
+                } catch(e) {
+                    console.error("Cloud push failed:", e);
+                }
+            },
+            listenData(syncId, callback) {
+                if (!db || !syncId) return;
+                if (unsubscribeSync) unsubscribeSync();
+
+                window.updateSyncBadgeStatus(false, "連線中...");
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'dashboards', syncId.toLowerCase());
+                
+                unsubscribeSync = onSnapshot(docRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        callback(docSnap.data());
+                        window.updateSyncBadgeStatus(true);
+                    } else {
+                        window.updateSyncBadgeStatus(true, "新同步碼");
+                    }
+                }, (err) => {
+                    console.error("Cloud listen failed:", err);
+                    window.updateSyncBadgeStatus(false, "連線錯誤");
+                });
+            }
+        };
+    </script>
+
+    <script>
+        /* ================== STATE & CONFIG ================== */
+        // 港鐵路線與車站地圖數據
+        const mtrStationsMap = {
+            TWL: [
+                { c: 'CEN', n: '中環' }, { c: 'ADM', n: '金鐘' }, { c: 'TST', n: '尖沙咀' }, { c: 'JOR', n: '佐敦' },
+                { c: 'YMT', n: '油麻地' }, { c: 'MOK', n: '旺角' }, { c: 'SSP', n: '深水埗' }, { c: 'CSW', n: '長沙灣' },
+                { c: 'LCK', n: '荔枝角' }, { c: 'MEI', n: '美孚' }, { c: 'LAK', n: '荔景' }, { c: 'KWF', n: '葵芳' },
+                { c: 'KHC', n: '葵興' }, { c: 'TWO', n: '大窩口' }, { c: 'TSW', n: '荃灣' }
+            ],
+            KTL: [
+                { c: 'WHA', n: '黃埔' }, { c: 'HOM', n: '何文田' }, { c: 'YMT', n: '油麻地' }, { c: 'MOK', n: '旺角' },
+                { c: 'PRE', n: '太子' }, { c: 'SKM', n: '石硤尾' }, { c: 'KOT', n: '九龍塘' }, { c: 'LOF', n: '樂富' },
+                { c: 'WTS', n: '黃大仙' }, { c: 'DIH', n: '鑽石山' }, { c: 'CHH', n: '彩虹' }, { c: 'KOB', n: '九龍灣' },
+                { c: 'NTK', n: '牛頭角' }, { c: 'KWT', n: '觀塘' }, { c: 'LAT', n: '藍田' }, { c: 'YAT', n: '油塘' }, { c: 'TIK', n: '調景嶺' }
+            ],
+            ISL: [
+                { c: 'KET', n: '堅尼地城' }, { c: 'HKU', n: '香港大學' }, { c: 'SYP', n: '西營盤' }, { c: 'SHW', n: '上環' },
+                { c: 'CEN', n: '中環' }, { c: 'ADM', n: '金鐘' }, { c: 'WAC', n: '灣仔' }, { c: 'CAB', n: '銅鑼灣' },
+                { c: 'TIH', n: '天后' }, { c: 'FOH', n: '炮台山' }, { c: 'NOP', n: '北角' }, { c: 'QUB', n: '鰂魚涌' },
+                { c: 'TAK', n: '太古' }, { c: 'SWH', n: '西灣河' }, { c: 'SKW', n: '筲箕灣' }, { c: 'HFC', n: '杏花邨' }, { c: 'CHW', n: '柴灣' }
+            ],
+            EAL: [
+                { c: 'ADM', n: '金鐘' }, { c: 'EXC', n: '會展' }, { c: 'HUH', n: '紅磡' }, { c: 'MOK', n: '旺角東' },
+                { c: 'KOT', n: '九龍塘' }, { c: 'TAW', n: '大圍' }, { c: 'SHT', n: '沙田' }, { c: 'FOT', n: '火炭' },
+                { c: 'RAC', n: '馬場' }, { c: 'UNI', n: '大學' }, { c: 'TAP', n: '大埔墟' }, { c: 'TWO', n: '太和' },
+                { c: 'FAN', n: '粉嶺' }, { c: 'SHS', n: '上水' }, { c: 'LOW', n: '羅湖' }, { c: 'LKM', n: '落馬洲' }
+            ],
+            TML: [
+                { c: 'WKS', n: '烏溪沙' }, { c: 'MOS', n: '馬鞍山' }, { c: 'HEO', n: '恆安' }, { c: 'TSH', n: '大水坑' },
+                { c: 'SHM', n: '石門' }, { c: 'CIO', n: '第一城' }, { c: 'STW', n: '沙田圍' }, { c: 'CKT', n: '車公廟' },
+                { c: 'TAW', n: '大圍' }, { c: 'HIK', n: '顯徑' }, { c: 'DIH', n: '鑽石山' }, { c: 'KAT', n: '啟德' },
+                { c: 'SUW', n: '宋皇臺' }, { c: 'TKW', n: '土瓜灣' }, { c: 'HOM', n: '何文田' }, { c: 'HUH', n: '紅磡' },
+                { c: 'ETS', n: '尖東' }, { c: 'AUS', n: '柯士甸' }, { c: 'MEI', n: '美孚' }, { c: 'TWW', n: '荃灣西' },
+                { c: 'KSR', n: '錦上路' }, { c: 'YUL', n: '元朗' }, { c: 'LOP', n: '朗屏' }, { c: 'TIS', n: '天水圍' },
+                { c: 'SIH', n: '兆康' }, { c: 'TUM', n: '屯門' }
+            ],
+            TCL: [
+                { c: 'HOK', n: '香港' }, { c: 'KOW', n: '九龍' }, { c: 'OLY', n: '奧運' }, { c: 'NAC', n: '南昌' },
+                { c: 'LAK', n: '荔景' }, { c: 'TSY', n: '青衣' }, { c: 'SUN', n: '欣澳' }, { c: 'TOC', n: '東涌' }
+            ],
+            TKL: [
+                { c: 'NOP', n: '北角' }, { c: 'QUB', n: '鰂魚涌' }, { c: 'YAT', n: '油塘' }, { c: 'TIK', n: '調景嶺' },
+                { c: 'TKO', n: '將軍澳' }, { c: 'HAH', n: '坑口' }, { c: 'POA', n: '寶琳' }, { c: 'LHO', n: '康城' }
+            ],
+            AEL: [
+                { c: 'HOK', n: '香港' }, { c: 'KOW', n: '九龍' }, { c: 'TSY', n: '青衣' }, { c: 'AIR', n: '機場' }, { c: 'AWE', n: '博覽館' }
+            ],
+            SIL: [
+                { c: 'ADM', n: '金鐘' }, { c: 'OCP', n: '海洋公園' }, { c: 'WCH', n: '黃竹坑' }, { c: 'LEI', n: '利東' }, { c: 'SOH', n: '海怡半島' }
+            ]
+        };
+
+        // ESPN 預設足球聯賽清單
+        const PRESET_LEAGUES = [
+            { slug: 'eng.1', name: '英超' },
+            { slug: 'esp.1', name: '西甲' },
+            { slug: 'ger.1', name: '德甲' },
+            { slug: 'ita.1', name: '意甲' },
+            { slug: 'fra.1', name: '法甲' },
+            { slug: 'uefa.champions', name: '歐聯' },
+            { slug: 'uefa.europa', name: '歐霸' },
+            { slug: 'eng.2', name: '英冠' },
+            { slug: 'usa.1', name: '美職' },
+            { slug: 'chn.1', name: '中超' }
+        ];
+
+        let userConfig = {
+            syncId: '',
+            finnhubApiKey: 'da7rccpr01qj8fm7ttd0da7rccpr01qj8fm7ttdg',
+            stocks: ['MU', 'VTI'],
+            mtrLine: 'TML',
+            mtrSta: 'TIS',
+            footballLeagues: ['eng.1', 'esp.1', 'ger.1', 'ita.1', 'fra.1', 'uefa.champions'],
+            activeNewsCategory: 'local',
+            rssUrlsLocal: [
+                'https://rthk.hk/rthk/news/rss/c_expressnews_clocal.xml'
+            ],
+            rssUrlsSports: [
+                'https://www.transfermarkt.co.uk/rss/news',
+                'http://newsrss.bbc.co.uk/rss/sportonline_uk_edition/football/rss.xml'
+            ]
+        };
+
+        let tempSelectedLeagues = [];
+        let etaCountdown = 15;
+        let gpsLocation = { lat: 22.31, lng: 114.17, name: '京士柏' };
+
+        /* ================== UTILITIES & HELPERS ================== */
+        async function safeFetchJson(url, options = {}) {
+            try {
+                const res = await fetch(url, options);
+                if (!res.ok) return null;
+                const text = await res.text();
+                if (!text || !text.trim()) return null;
+                return JSON.parse(text);
+            } catch (e) {
+                console.warn("Fetch or JSON parse skipped for URL:", url, e);
+                return null;
+            }
+        }
+
+        function setInputValue(id, val) {
+            const el = document.getElementById(id);
+            if (el) el.value = val !== undefined && val !== null ? val : '';
+        }
+
+        function getInputValue(id) {
+            const el = document.getElementById(id);
+            return el ? el.value.trim() : '';
+        }
+
+        function updateSyncBadgeStatus(isConnected, customText = null) {
+            const dot = document.getElementById('sync-dot');
+            const text = document.getElementById('sync-status-text');
+            const modalBadge = document.getElementById('modal-sync-badge');
+
+            if (isConnected) {
+                if (dot) dot.className = "w-2 h-2 rounded-full bg-emerald-400 animate-pulse";
+                if (text) text.textContent = customText || `已同步 (${userConfig.syncId})`;
+                if (modalBadge) {
+                    modalBadge.className = "text-[10px] px-2 py-0.5 rounded bg-emerald-900/50 text-emerald-300 font-mono border border-emerald-700/50";
+                    modalBadge.textContent = "雲端同步中";
+                }
+            } else {
+                if (dot) dot.className = "w-2 h-2 rounded-full bg-amber-400";
+                if (text) text.textContent = customText || "未設定同步";
+                if (modalBadge) {
+                    modalBadge.className = "text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-400 font-mono";
+                    modalBadge.textContent = customText || "未設定";
+                }
+            }
+        }
+
+        function generateRandomSyncId() {
+            const randomCode = 'DASH-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+            setInputValue('setting-sync-id', randomCode);
+        }
+
+        function toggleQRCodeDisplay() {
+            const wrapper = document.getElementById('qrcode-wrapper');
+            const container = document.getElementById('qrcode-container');
+            if (!wrapper || !container) return;
+            
+            if (!wrapper.classList.contains('hidden')) {
+                wrapper.classList.add('hidden');
+                return;
+            }
+
+            const currentSyncId = getInputValue('setting-sync-id');
+            if (!currentSyncId) {
+                alert("請先輸入或產生一個「同步碼」！");
+                return;
+            }
+
+            container.innerHTML = '';
+            const shareUrl = new URL(window.location.href);
+            shareUrl.searchParams.set('sync', currentSyncId);
+
+            new QRCode(container, {
+                text: shareUrl.toString(),
+                width: 150,
+                height: 150,
+                colorDark : "#0f172a",
+                colorLight : "#ffffff",
+                correctLevel : QRCode.CorrectLevel.H
+            });
+
+            wrapper.classList.remove('hidden');
+        }
+
+        function copyShareLink() {
+            const currentSyncId = getInputValue('setting-sync-id');
+            if (!currentSyncId) {
+                alert("請先輸入或產生一個「同步碼」！");
+                return;
+            }
+            const shareUrl = new URL(window.location.href);
+            shareUrl.searchParams.set('sync', currentSyncId);
+            
+            const tempInput = document.createElement('input');
+            tempInput.value = shareUrl.toString();
+            document.body.appendChild(tempInput);
+            tempInput.select();
+            document.execCommand('copy');
+            document.body.removeChild(tempInput);
+            
+            alert("已複製配對連結！將連結傳送到手機或平板開啟即可直接同步。");
+        }
+
+        function syncToCloud() {
+            if (window.cloudSyncManager && userConfig.syncId) {
+                window.cloudSyncManager.pushData(userConfig.syncId, {
+                    config: userConfig
+                });
+            }
+        }
+
+        function setupCloudListener() {
+            if (window.cloudSyncManager && userConfig.syncId) {
+                window.cloudSyncManager.listenData(userConfig.syncId, (data) => {
+                    if (!data) return;
+                    if (data.config) {
+                        userConfig = { ...userConfig, ...data.config };
+                        localStorage.setItem('dashCfg', JSON.stringify(userConfig));
+                    }
+                    fetchAllData();
+                });
+            }
+        }
+
+        /* ================== CLOCK & FULLSCREEN ================== */
+        function startClock() {
+            function update() {
+                const now = new Date();
+                const year = now.getFullYear();
+                const month = String(now.getMonth() + 1).padStart(2, '0');
+                const date = String(now.getDate()).padStart(2, '0');
+                const days = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+                const dayStr = days[now.getDay()];
+
+                const hours = String(now.getHours()).padStart(2, '0');
+                const mins = String(now.getMinutes()).padStart(2, '0');
+                const secs = String(now.getSeconds()).padStart(2, '0');
+
+                const dateEl = document.getElementById('clock-date');
+                const timeEl = document.getElementById('clock-time');
+                const secEl = document.getElementById('clock-sec');
+
+                if (dateEl) dateEl.textContent = `${year}年${month}月${date}日 ${dayStr}`;
+                if (timeEl) timeEl.textContent = `${hours}:${mins}`;
+                if (secEl) secEl.textContent = secs;
+            }
+            update();
+            setInterval(update, 1000);
+        }
+
+        function toggleFullScreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch(() => {});
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen().catch(() => {});
+                }
+            }
+        }
+
+        /* ================== GPS GEOLOCATION ================== */
+        function requestGPSLocation() {
+            const locLabel = document.getElementById('weather-location');
+            if (locLabel) locLabel.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 定位中...';
+
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (pos) => {
+                        const lat = pos.coords.latitude;
+                        const lng = pos.coords.longitude;
+                        
+                        let nearest = weatherStations[0];
+                        let minDist = Infinity;
+                        weatherStations.forEach(st => {
+                            const d = Math.hypot(st.lat - lat, st.lng - lng);
+                            if (d < minDist) {
+                                minDist = d;
+                                nearest = st;
+                            }
+                        });
+                        
+                        gpsLocation = { lat, lng, name: nearest.name };
+                        if (locLabel) locLabel.innerHTML = `<i class="fa-solid fa-location-dot"></i> ${nearest.name}`;
+                        fetchHKOWeather();
+                    },
+                    (err) => {
+                        console.warn("GPS Location error or denied:", err);
+                        gpsLocation = { lat: 22.3119, lng: 114.1728, name: '京士柏' };
+                        if (locLabel) locLabel.innerHTML = `<i class="fa-solid fa-location-dot"></i> 京士柏 (預設)`;
+                        fetchHKOWeather();
+                    },
+                    { timeout: 8000 }
+                );
+            } else {
+                gpsLocation = { lat: 22.3119, lng: 114.1728, name: '京士柏' };
+                if (locLabel) locLabel.innerHTML = `<i class="fa-solid fa-location-dot"></i> 京士柏`;
+                fetchHKOWeather();
+            }
+        }
+
+        /* ================== WEATHER API ================== */
+        async function fetchHKOWeather() {
+            try {
+                const [wData, warnDataRaw] = await Promise.all([
+                    safeFetchJson('https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=rhrread&lang=tc'),
+                    safeFetchJson('https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=warnsum&lang=tc')
+                ]);
+
+                if (!wData) return;
+                const warnData = warnDataRaw || {};
+
+                // 氣溫
+                if (wData.temperature && wData.temperature.data) {
+                    const tempObj = wData.temperature.data.find(t => t.place === gpsLocation.name) || wData.temperature.data[0];
+                    const tempEl = document.getElementById('weather-temp');
+                    if (tempEl && tempObj) tempEl.textContent = tempObj.value;
+                }
+
+                // 濕度
+                if (wData.humidity && wData.humidity.data && wData.humidity.data.length > 0) {
+                    const humEl = document.getElementById('weather-humidity');
+                    if (humEl) humEl.textContent = `${wData.humidity.data[0].value}%`;
+                }
+
+                // 紫外線指數
+                const uvEl = document.getElementById('weather-uv');
+                if (uvEl) {
+                    if (wData.uvindex && wData.uvindex.data && wData.uvindex.data.length > 0) {
+                        uvEl.textContent = wData.uvindex.data[0].value || '0';
+                    } else {
+                        uvEl.textContent = '0';
+                    }
+                }
+
+                // 天氣圖示
+                const iconContainer = document.getElementById('weather-icon-container');
+                if (iconContainer && wData.icon && wData.icon.length > 0) {
+                    const iconCode = wData.icon[0];
+                    iconContainer.innerHTML = getHKOWeatherEmoji(iconCode);
+                }
+
+                // 天氣警告
+                const warnEl = document.getElementById('weather-warning');
+                if (warnEl) {
+                    const warnKeys = Object.keys(warnData);
+                    if (warnKeys.length > 0) {
+                        const warnNames = warnKeys.map(k => warnData[k].name || k).join(', ');
+                        warnEl.textContent = warnNames;
+                        warnEl.className = "text-rose-400 font-bold animate-pulse";
+                    } else {
+                        warnEl.textContent = "無警告";
+                        warnEl.className = "text-emerald-400 font-normal";
+                    }
+                }
+            } catch (e) {
+                console.error("HKO Weather fetch error:", e);
+            }
+        }
+
+        function getHKOWeatherEmoji(code) {
+            if ([50, 51, 52].includes(code)) return '☀️'; 
+            if ([53, 54, 60, 61].includes(code)) return '🌤️'; 
+            if ([62, 63, 64, 65].includes(code)) return '🌧️'; 
+            if ([66, 67, 68, 69].includes(code)) return '🌩️'; 
+            return '⛅';
+        }
+
+        /* ================== STOCK API ================== */
+        async function fetchStockData() {
+            const container = document.getElementById('stock-list-container');
+            const badge = document.getElementById('stock-source-badge');
+            const updateTimeEl = document.getElementById('stock-last-update');
+            if (!container) return;
+
+            const stocks = userConfig.stocks || ['HSI', '0700.HK', '9988.HK', 'AAPL'];
+            const apiKey = userConfig.finnhubApiKey;
+
+            if (badge) badge.textContent = apiKey ? 'Finnhub API' : '即時報價';
+
+            try {
+                let html = '';
+                for (let symbol of stocks) {
+                    let price = '--';
+                    let change = '--';
+                    let percent = '--';
+                    let isUp = true;
+
+                    if (apiKey) {
+                        try {
+                            let formattedSymbol = symbol;
+                            if (symbol === 'HSI') formattedSymbol = '^HSI';
+                            const data = await safeFetchJson(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(formattedSymbol)}&token=${apiKey}`);
+                            if (data && data.c !== undefined && data.c !== 0) {
+                                price = data.c.toFixed(2);
+                                change = (data.d || 0).toFixed(2);
+                                percent = (data.dp || 0).toFixed(2);
+                                isUp = (data.d || 0) >= 0;
+                            }
+                        } catch(err) {
+                            console.warn(`Stock ${symbol} fetch failed:`, err);
+                        }
+                    }
+
+                    if (price === '--') {
+                        const mockMap = {
+                            'MU': { p: 102.50, c: +2.15, dp: +2.14 },
+                            'VTI': { p: 275.80, c: +1.40, dp: +0.51 },
+                            'HSI': { p: 17820.50, c: +125.30, dp: +0.71 },
+                            '0700.HK': { p: 382.40, c: +4.80, dp: +1.27 },
+                            '9988.HK': { p: 78.60, c: -0.45, dp: -0.57 },
+                            'AAPL': { p: 224.30, c: +1.85, dp: +0.83 }
+                        };
+                        const m = mockMap[symbol.toUpperCase()] || { p: 100.00, c: 1.2, dp: 1.2 };
+                        price = typeof m.p === 'number' ? m.p.toFixed(2) : m.p;
+                        change = (m.c > 0 ? '+' : '') + m.c;
+                        percent = (m.dp > 0 ? '+' : '') + m.dp + '%';
+                        isUp = parseFloat(m.c) >= 0;
+                    } else {
+                        change = (parseFloat(change) >= 0 ? '+' : '') + change;
+                        percent = (parseFloat(percent) >= 0 ? '+' : '') + percent + '%';
+                    }
+
+                    const colorClass = isUp ? 'text-emerald-400' : 'text-rose-400';
+                    const iconClass = isUp ? 'fa-caret-up' : 'fa-caret-down';
+
+                    html += `
+                    <div class="bg-slate-900/50 p-2.5 rounded-xl border border-slate-700/50 flex justify-between items-center hover:border-emerald-500/40 transition-colors">
+                        <div class="font-bold text-sm text-white flex items-center gap-2">
+                            <span>${symbol}</span>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-sm font-bold text-white font-mono">${price}</div>
+                            <div class="text-xs ${colorClass} font-mono flex items-center justify-end gap-1">
+                                <i class="fa-solid ${iconClass}"></i>
+                                <span>${change} (${percent})</span>
+                            </div>
+                        </div>
+                    </div>`;
+                }
+                container.innerHTML = html;
+            } catch (e) {
+                console.error("Stock data fetch error:", e);
+                container.innerHTML = '<div class="text-center py-6 text-slate-500 text-xs">載入股票資訊失敗</div>';
+            } finally {
+                if (updateTimeEl) {
+                    const now = new Date();
+                    updateTimeEl.textContent = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')} 更新`;
+                }
+            }
+        }
+
+        /* ================== RSS PROXY CONFIG ================== */
+        // 部署 Cloudflare Worker 後，把下方網址改成你的 workers.dev 網址（不要加 /rss）。
+        // 例如：https://dashboard-rss-proxy.your-name.workers.dev
+        const RSS_PROXY_URL = 'https://dashboard-rss-proxy.jameshh998.workers.dev';
+
+        /* ================== LIVE NEWS API（所有 RSS 多路即時抓取） ================== */
+        function parseNewsDateMs(dateInput, sourceType = 'raw') {
+            if (!dateInput) return 0;
+            let str = String(dateInput).trim();
+
+            // rss2json 的無時區格式為 UTC；原生 RSS/Atom 若無時區則交由瀏覽器解析。
+            if (sourceType === 'rss2json' && /^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}$/.test(str)) {
+                str = str.replace(' ', 'T') + 'Z';
+            }
+
+            const d = new Date(str);
+            return isNaN(d.getTime()) ? 0 : d.getTime();
+        }
+
+        function formatHKTime(dateInput, sourceType = 'raw') {
+            const ms = parseNewsDateMs(dateInput, sourceType);
+            if (!ms) return '--:--';
+            return new Date(ms).toLocaleTimeString('zh-HK', {
+                timeZone: 'Asia/Hong_Kong',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false
+            });
+        }
+
+        function switchNewsCategory(category) {
+            userConfig.activeNewsCategory = category;
+            updateNewsCategoryUI();
+            fetchLiveNews();
+        }
+
+        function updateNewsCategoryUI() {
+            const btnLocal = document.getElementById('tab-btn-local');
+            const btnSports = document.getElementById('tab-btn-sports');
+            const cat = userConfig.activeNewsCategory || 'local';
+
+            if (btnLocal && btnSports) {
+                if (cat === 'local') {
+                    btnLocal.className = "px-2 py-0.5 text-xs rounded-md transition-colors font-medium bg-blue-600 text-white shadow-sm";
+                    btnSports.className = "px-2 py-0.5 text-xs rounded-md transition-colors font-medium text-slate-400 hover:text-white";
+                } else {
+                    btnLocal.className = "px-2 py-0.5 text-xs rounded-md transition-colors font-medium text-slate-400 hover:text-white";
+                    btnSports.className = "px-2 py-0.5 text-xs rounded-md transition-colors font-medium bg-blue-600 text-white shadow-sm";
+                }
+            }
+        }
+
+        function cleanXmlText(text) {
+            return String(text || '').replace(/^\uFEFF/, '').trim();
+        }
+
+        function parseNativeFeed(xmlText, fallbackTitle) {
+            try {
+                const text = cleanXmlText(xmlText);
+                if (!text) return [];
+
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(text, 'application/xml');
+                if (doc.querySelector('parsererror')) return [];
+
+                const channelTitle =
+                    doc.querySelector('channel > title')?.textContent?.trim() ||
+                    doc.querySelector('feed > title')?.textContent?.trim() ||
+                    fallbackTitle;
+
+                const nodes = [...doc.querySelectorAll('item, entry')];
+                return nodes.map(node => {
+                    const title = node.querySelector('title')?.textContent?.trim() || '';
+
+                    let link = node.querySelector('link')?.textContent?.trim() || '';
+                    const linkEl = node.querySelector('link[href]');
+                    if (!link && linkEl) link = linkEl.getAttribute('href') || '';
+                    if (!link) link = node.querySelector('guid, id')?.textContent?.trim() || '#';
+
+                    const pubDate =
+                        node.querySelector('pubDate')?.textContent?.trim() ||
+                        node.querySelector('published')?.textContent?.trim() ||
+                        node.querySelector('updated')?.textContent?.trim() ||
+                        node.querySelector('date')?.textContent?.trim() ||
+                        '';
+
+                    return {
+                        title,
+                        link,
+                        pubDate,
+                        channelTitle,
+                        sourceType: 'raw'
+                    };
+                }).filter(item => item.title);
+            } catch (e) {
+                console.warn('Native RSS parse failed:', e);
+                return [];
+            }
+        }
+
+        async function fetchTextWithTimeout(url, timeoutMs = 7000) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+                const res = await fetch(url, {
+                    signal: controller.signal,
+                    cache: 'no-store',
+                    mode: 'cors'
+                });
+                if (!res.ok) return '';
+                return await res.text();
+            } catch (e) {
+                return '';
+            } finally {
+                clearTimeout(timer);
+            }
+        }
+
+        async function fetchJsonWithTimeout(url, timeoutMs = 7000) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+                const res = await fetch(url, {
+                    signal: controller.signal,
+                    cache: 'no-store',
+                    mode: 'cors'
+                });
+                if (!res.ok) return null;
+                return await res.json();
+            } catch (e) {
+                return null;
+            } finally {
+                clearTimeout(timer);
+            }
+        }
+
+        function newestItemMs(items) {
+            return (items || []).reduce((max, item) => {
+                return Math.max(max, parseNewsDateMs(item.pubDate, item.sourceType));
+            }, 0);
+        }
+
+        async function fetchOneRssSource(rssUrl, fallbackTitle) {
+            if (!rssUrl) return [];
+
+            // 優先使用自己的 Cloudflare Worker RSS Proxy。
+            // 所有在設定中加入的 RSS 都會自動經這個 Proxy，避開瀏覽器 CORS 與第三方 proxy 快取。
+            const proxyConfigured = RSS_PROXY_URL && !RSS_PROXY_URL.includes('YOUR-WORKER');
+            if (proxyConfigured) {
+                const proxyBase = RSS_PROXY_URL.replace(/\/$/, '');
+                const proxyUrl = `${proxyBase}/rss?url=${encodeURIComponent(rssUrl)}&_=${Date.now()}`;
+                const proxyText = await fetchTextWithTimeout(proxyUrl, 12000);
+                const proxyItems = parseNativeFeed(proxyText, fallbackTitle);
+                if (proxyItems.length > 0) return proxyItems;
+                console.warn('Own RSS proxy failed; using browser fallback:', rssUrl);
+            }
+
+            const stamp = Date.now();
+            const sep = rssUrl.includes('?') ? '&' : '?';
+            const bustedFeedUrl = `${rssUrl}${sep}_dashboard_t=${stamp}`;
+
+            // 不加自訂 Cache-Control header，避免 GitHub Pages 瀏覽器產生額外 CORS preflight。
+            const rawCandidates = [
+                bustedFeedUrl,
+                `https://api.allorigins.win/raw?url=${encodeURIComponent(bustedFeedUrl)}&_=${stamp}`,
+                `https://corsproxy.io/?url=${encodeURIComponent(bustedFeedUrl)}&_=${stamp}`,
+                `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(bustedFeedUrl)}&_=${stamp}`
+            ];
+
+            const rawPromises = rawCandidates.map(async fetchUrl => {
+                const text = await fetchTextWithTimeout(fetchUrl);
+                return parseNativeFeed(text, fallbackTitle);
+            });
+
+            // rss2json 只作其中一路，不再是唯一資料來源；API 請求本身加時間戳，feed URL 保持原樣。
+            const rss2jsonPromise = (async () => {
+                const apiUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(rssUrl)}&_=${stamp}`;
+                const data = await fetchJsonWithTimeout(apiUrl);
+                if (!data || data.status !== 'ok' || !Array.isArray(data.items)) return [];
+                const channelTitle = data.feed?.title || fallbackTitle;
+                return data.items.map(item => ({
+                    title: item.title || '',
+                    link: item.link || item.guid || '#',
+                    pubDate: item.pubDate || '',
+                    channelTitle,
+                    sourceType: 'rss2json'
+                })).filter(item => item.title);
+            })();
+
+            const variants = await Promise.all([...rawPromises, rss2jsonPromise]);
+            const valid = variants.filter(items => Array.isArray(items) && items.length > 0);
+            if (!valid.length) return [];
+
+            // 對「這一個 RSS」採用最新文章時間最晚的回傳版本，避免某個 proxy 舊快取先成功就被採用。
+            valid.sort((a, b) => newestItemMs(b) - newestItemMs(a));
+            return valid[0];
+        }
+
+        async function fetchLiveNews() {
+            const container = document.getElementById('news-list-container');
+            const updateTimeEl = document.getElementById('news-update-time');
+            const refreshIcon = document.getElementById('news-refresh-icon');
+            if (!container) return;
+
+            if (refreshIcon) refreshIcon.classList.add('animate-spin');
+
+            const category = userConfig.activeNewsCategory || 'local';
+            let urls = category === 'sports' ? userConfig.rssUrlsSports : userConfig.rssUrlsLocal;
+            if (!Array.isArray(urls) || urls.length === 0) {
+                urls = category === 'sports'
+                    ? ['https://www.transfermarkt.co.uk/rss/news', 'http://newsrss.bbc.co.uk/rss/sportonline_uk_edition/football/rss.xml']
+                    : ['https://rthk.hk/rthk/news/rss/c_expressnews_clocal.xml'];
+            }
+
+            // 去重網址，所有使用者自行加入的 RSS 都走完全相同的即時抓取流程。
+            urls = [...new Set(urls.map(u => String(u).trim()).filter(Boolean))];
+
+            try {
+                const fallbackTitle = category === 'sports' ? '體育新聞' : '本地新聞';
+                const results = await Promise.all(urls.map(url => fetchOneRssSource(url, fallbackTitle)));
+                let allItems = results.flat();
+
+                if (!allItems.length) throw new Error('All RSS sources failed');
+
+                // 去除跨來源重複新聞，再按實際時間排序。
+                const seen = new Set();
+                allItems = allItems.filter(item => {
+                    const key = `${(item.title || '').trim()}|${(item.link || '').trim()}`;
+                    if (!item.title || seen.has(key)) return false;
+                    seen.add(key);
+                    return true;
+                });
+
+                allItems.sort((a, b) =>
+                    parseNewsDateMs(b.pubDate, b.sourceType) - parseNewsDateMs(a.pubDate, a.sourceType)
+                );
+
+                const escapeHtml = (value) => String(value ?? '')
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#039;');
+
+                let html = '';
+                allItems.slice(0, 10).forEach(item => {
+                    const timeStr = formatHKTime(item.pubDate, item.sourceType);
+                    const cleanTitle = String(item.title || '最新新聞').replace(/<[^>]*>?/gm, '');
+                    const link = /^https?:\/\//i.test(item.link || '') ? item.link : '#';
+                    const channelTitle = item.channelTitle || fallbackTitle;
+
+                    html += `
+                    <a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer" class="group bg-slate-900/50 p-2.5 rounded-xl border border-slate-700/50 hover:border-sky-500/50 transition-all flex flex-col gap-1">
+                        <div class="text-xs text-slate-200 group-hover:text-sky-300 font-medium line-clamp-2 transition-colors">
+                            ${escapeHtml(cleanTitle)}
+                        </div>
+                        <div class="flex items-center justify-between text-[10px] text-slate-400 font-mono mt-1">
+                            <span><i class="fa-regular fa-clock mr-1"></i>${escapeHtml(timeStr)}</span>
+                            <span class="text-sky-400 group-hover:underline max-w-[150px] truncate" title="${escapeHtml(channelTitle)}">${escapeHtml(channelTitle)} <i class="fa-solid fa-arrow-up-right-from-square text-[9px]"></i></span>
+                        </div>
+                    </a>`;
+                });
+                container.innerHTML = html;
+            } catch (e) {
+                console.warn('RSS fetch failed:', e);
+                container.innerHTML = `
+                    <div class="text-center py-8 text-slate-400 text-xs leading-relaxed">
+                        <i class="fa-solid fa-triangle-exclamation text-amber-400 mr-1"></i>
+                        暫時無法取得最新 RSS。<br>
+                        <span class="text-slate-500">系統會在下一次刷新自動重試。</span>
+                    </div>`;
+            } finally {
+                if (refreshIcon) refreshIcon.classList.remove('animate-spin');
+                if (updateTimeEl) {
+                    const now = new Date();
+                    updateTimeEl.textContent = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')} 更新`;
+                }
+            }
+        }
+
+        function addRssPreset(targetId, url) {
+            const textarea = document.getElementById(targetId);
+            if (!textarea) return;
+            let current = textarea.value.trim();
+            if (current) {
+                if (!current.includes(url)) {
+                    textarea.value = current + '\n' + url;
+                }
+            } else {
+                textarea.value = url;
+            }
+        }
+
+        function clearRssUrls() {
+            setInputValue('setting-rss-urls', '');
+        }
+
+        /* ================== 1. 鐵路到站時間 ================== */
+        async function fetchTransportETA() {
+            const lineLabel = document.getElementById('mtr-line-label');
+            const staLabel = document.getElementById('mtr-sta-label');
+            if (lineLabel) lineLabel.textContent = userConfig.mtrLine;
+            
+            let staName = userConfig.mtrSta;
+            const staList = mtrStationsMap[userConfig.mtrLine] || [];
+            const foundSta = staList.find(s => s.c === userConfig.mtrSta);
+            if(foundSta) staName = foundSta.n;
+            if (staLabel) staLabel.textContent = staName;
+            
+            const mtrContainer = document.getElementById('mtr-eta-container');
+            if (mtrContainer) {
+                try {
+                    const data = await safeFetchJson(`https://rt.data.gov.hk/v1/transport/mtr/getSchedule.php?line=${userConfig.mtrLine}&sta=${userConfig.mtrSta}`);
+                    
+                    if (data && data.status === 1 && data.data && data.data[`${userConfig.mtrLine}-${userConfig.mtrSta}`]) {
+                        const staData = data.data[`${userConfig.mtrLine}-${userConfig.mtrSta}`];
+                        let html = '';
+                        ['UP', 'DOWN'].forEach(dir => {
+                            if (staData[dir] && staData[dir].length > 0) {
+                                const destCode = staData[dir][0].dest;
+                                let destName = destCode;
+                                staList.forEach(s => { if(s.c === destCode) destName = s.n; });
+
+                                html += `<div class="bg-slate-800/80 p-2.5 rounded-lg border border-slate-700/60">
+                                    <div class="text-[11px] text-slate-400 mb-1 flex items-center gap-1"><i class="fa-solid fa-arrow-right text-blue-400"></i> 往 <span class="text-slate-200 font-bold">${destName}</span></div>
+                                    <div class="flex gap-3 items-baseline">`;
+                                staData[dir].slice(0, 2).forEach((train, idx) => {
+                                    const minStr = calcMinsStr(train.time);
+                                    const isNow = minStr === '即將抵達' || minStr === '到達';
+                                    html += `<span class="${idx===0 ? (isNow?'text-xl font-bold text-rose-400 animate-pulse':'text-xl font-bold text-amber-400') : 'text-xs text-slate-400'}">${idx>0?'次班: ':''}${minStr}</span>`;
+                                });
+                                html += `</div></div>`;
+                            }
+                        });
+                        mtrContainer.innerHTML = html || '<div class="text-slate-400 text-xs py-2 text-center">目前非服務時間或無列車資訊</div>';
+                    } else {
+                        mtrContainer.innerHTML = '<div class="text-slate-400 text-xs py-2 text-center">查無該車站列車數據</div>';
+                    }
+                } catch (e) {
+                    mtrContainer.innerHTML = '<div class="text-rose-400 text-xs py-2 text-center">網絡連線中斷</div>';
+                }
+            }
+            
+            etaCountdown = 15;
+            const etaTimer = document.getElementById('eta-timer');
+            if (etaTimer) etaTimer.textContent = `${etaCountdown}s 後刷新`;
+        }
+        
+        function calcMinsStr(timeStr) {
+            if(!timeStr) return '--';
+            const diff = Math.floor((new Date(timeStr.replace(' ','T')) - new Date()) / 60000);
+            return diff <= 0 ? '即將抵達' : `${diff} 分鐘`;
+        }
+
+        /* ================== 2. 最新足球比賽比分 (ESPN API) ================== */
+        async function fetchFootballScores() {
+            const container = document.getElementById('football-scores-container');
+            if (!container) return;
+
+            let selectedLeagues = userConfig.footballLeagues;
+            if (!selectedLeagues || selectedLeagues.length === 0) {
+                selectedLeagues = ['eng.1', 'esp.1', 'ger.1', 'ita.1', 'fra.1', 'uefa.champions'];
+            }
+
+            try {
+                // 並行發送 ESPN API 請求
+                const fetchPromises = selectedLeagues.map(slug => 
+                    safeFetchJson(`https://site.api.espn.com/apis/site/v2/sports/soccer/${slug}/scoreboard`)
+                );
+
+                const results = await Promise.all(fetchPromises);
+
+                let allEvents = [];
+                results.forEach((data, index) => {
+                    if (data && data.events && Array.isArray(data.events)) {
+                        const slug = selectedLeagues[index];
+                        const presetObj = PRESET_LEAGUES.find(p => p.slug === slug || p.id === slug);
+                        const leagueName = presetObj ? presetObj.name : (data.leagues?.[0]?.abbreviation || data.leagues?.[0]?.name || slug);
+                        
+                        data.events.forEach(evt => {
+                            allEvents.push({
+                                ...evt,
+                                leagueDisplayName: leagueName
+                            });
+                        });
+                    }
+                });
+
+                if (allEvents.length === 0) {
+                    container.innerHTML = `
+                    <div class="text-center py-8 text-slate-400 text-xs flex flex-col items-center gap-2">
+                        <i class="fa-solid fa-calendar-xmark text-2xl text-slate-500 mb-1"></i>
+                        <span>所選聯賽今日暫無比賽</span>
+                        <button onclick="resetFootballLeagues()" class="mt-2 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium transition-colors">
+                            重置為預設熱門聯賽
+                        </button>
+                    </div>`;
+                    return;
+                }
+
+                let html = '';
+                allEvents.slice(0, 15).forEach(evt => {
+                    const comp = evt.competitions?.[0];
+                    if (!comp) return;
+
+                    const home = comp.competitors?.find(c => c.homeAway === 'home');
+                    const away = comp.competitors?.find(c => c.homeAway === 'away');
+
+                    if (!home || !away) return;
+
+                    const homeName = home.team?.shortDisplayName || home.team?.displayName || home.team?.name || '主隊';
+                    const awayName = away.team?.shortDisplayName || away.team?.displayName || away.team?.name || '客隊';
+                    
+                    const homeLogo = home.team?.logo || 'https://placehold.co/20x20/1e293b/ffffff?text=H';
+                    const awayLogo = away.team?.logo || 'https://placehold.co/20x20/1e293b/ffffff?text=A';
+
+                    const statusState = evt.status?.type?.state; // 'pre', 'in', 'post'
+                    const statusDetail = evt.status?.type?.shortDetail || evt.status?.type?.detail || '';
+                    const displayClock = evt.status?.displayClock;
+
+                    let statusBadge = '';
+                    let scoreText = '';
+
+                    if (statusState === 'in') {
+                        // 進行中賽事
+                        const clockText = displayClock ? `${displayClock}'` : (statusDetail || '進行中');
+                        statusBadge = `<span class="px-2 py-0.5 rounded bg-rose-500/20 text-rose-400 border border-rose-500/30 font-mono text-[10px] font-bold animate-pulse"><i class="fa-solid fa-circle text-[6px] mr-1"></i>${clockText}</span>`;
+                        scoreText = `${home.score ?? 0} - ${away.score ?? 0}`;
+                    } else if (statusState === 'post') {
+                        // 完場賽事
+                        statusBadge = `<span class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 font-mono text-[10px]">完場 (FT)</span>`;
+                        scoreText = `${home.score ?? 0} - ${away.score ?? 0}`;
+                    } else {
+                        // 未開賽
+                        const gameDate = new Date(evt.date);
+                        const timeStr = isNaN(gameDate) ? '未開賽' : `${String(gameDate.getHours()).padStart(2, '0')}:${String(gameDate.getMinutes()).padStart(2, '0')}`;
+                        statusBadge = `<span class="px-2 py-0.5 rounded bg-slate-800 text-amber-400 border border-slate-700/80 font-mono text-[10px]"><i class="fa-regular fa-clock mr-1"></i>${timeStr}</span>`;
+                        scoreText = `VS`;
+                    }
+
+                    html += `
+                    <div class="bg-slate-900/50 p-2.5 rounded-xl border border-slate-700/50 flex flex-col gap-2 hover:border-emerald-500/40 transition-colors">
+                        <div class="flex justify-between items-center text-[10px] text-slate-400">
+                            <span class="truncate max-w-[140px] text-slate-300 font-medium">${evt.leagueDisplayName}</span>
+                            ${statusBadge}
+                        </div>
+                        <div class="flex items-center justify-between text-sm font-bold">
+                            <div class="flex items-center gap-2 flex-1 min-w-0">
+                                <img src="${homeLogo}" alt="${homeName}" class="w-5 h-5 object-contain shrink-0" onerror="this.onerror=null;this.src='https://placehold.co/20x20/334155/ffffff?text=H'">
+                                <span class="truncate text-white text-xs">${homeName}</span>
+                            </div>
+                            
+                            <div class="px-2.5 py-0.5 bg-slate-800 rounded border border-slate-700 text-center font-mono text-xs tracking-wider text-amber-400 shrink-0 mx-2">
+                                ${scoreText}
+                            </div>
+                            
+                            <div class="flex items-center justify-end gap-2 flex-1 min-w-0 text-right">
+                                <span class="truncate text-white text-xs">${awayName}</span>
+                                <img src="${awayLogo}" alt="${awayName}" class="w-5 h-5 object-contain shrink-0" onerror="this.onerror=null;this.src='https://placehold.co/20x20/334155/ffffff?text=A'">
+                            </div>
+                        </div>
+                    </div>`;
+                });
+
+                container.innerHTML = html;
+            } catch (e) {
+                console.error("ESPN Football Fetch Error:", e);
+                container.innerHTML = `<div class="text-center py-6 text-slate-400 text-xs">載入 ESPN 足球賽事失敗</div>`;
+            }
+        }
+
+        function resetFootballLeagues() {
+            userConfig.footballLeagues = ['eng.1', 'esp.1', 'ger.1', 'ita.1', 'fra.1', 'uefa.champions'];
+            localStorage.setItem('dashCfg', JSON.stringify(userConfig));
+            syncToCloud();
+            fetchFootballScores();
+        }
+
+        /* ================== APP FLOW & MODALS ================== */
+        function renderLeagueChips() {
+            const container = document.getElementById('league-chips-container');
+            const badge = document.getElementById('league-count-badge');
+            if (!container) return;
+
+            let html = '';
+            PRESET_LEAGUES.forEach(p => {
+                const isSelected = tempSelectedLeagues.includes(p.slug);
+                const activeStyle = isSelected 
+                    ? 'bg-emerald-600 text-white border-emerald-500 shadow-sm' 
+                    : 'bg-slate-900/80 text-slate-400 border-slate-700 hover:text-slate-200 hover:border-slate-600';
+
+                html += `
+                <button type="button" onclick="toggleLeagueSelection('${p.slug}')" class="px-2.5 py-1 rounded-lg text-xs font-medium border transition-all flex items-center gap-1 ${activeStyle}">
+                    ${isSelected ? '<i class="fa-solid fa-check text-[10px]"></i>' : ''}
+                    <span>${p.name}</span>
+                    <span class="text-[9px] text-slate-400 font-mono">(${p.slug})</span>
+                </button>`;
+            });
+
+            // 自訂代碼（不在預設清單中）
+            tempSelectedLeagues.forEach(slug => {
+                if (!PRESET_LEAGUES.some(p => p.slug === slug)) {
+                    html += `
+                    <button type="button" onclick="toggleLeagueSelection('${slug}')" class="px-2.5 py-1 rounded-lg text-xs font-medium border transition-all flex items-center gap-1 bg-emerald-600 text-white border-emerald-500">
+                        <i class="fa-solid fa-check text-[10px]"></i>
+                        <span>${slug}</span>
+                    </button>`;
+                }
+            });
+
+            container.innerHTML = html;
+            if (badge) badge.textContent = `已選 ${tempSelectedLeagues.length}/10`;
+        }
+
+        function clearLeagueSelection() {
+            tempSelectedLeagues = [];
+            renderLeagueChips();
+        }
+
+        function toggleLeagueSelection(slug) {
+            const warn = document.getElementById('league-warning-msg');
+            if (warn) warn.classList.add('hidden');
+
+            const idx = tempSelectedLeagues.indexOf(slug);
+            if (idx > -1) {
+                tempSelectedLeagues.splice(idx, 1);
+            } else {
+                if (tempSelectedLeagues.length >= 10) {
+                    if (warn) warn.classList.remove('hidden');
+                    return;
+                }
+                tempSelectedLeagues.push(slug);
+            }
+            renderLeagueChips();
+        }
+
+        function addCustomLeague() {
+            const input = document.getElementById('setting-custom-league');
+            const warn = document.getElementById('league-warning-msg');
+            if (!input) return;
+            const val = input.value.trim().toLowerCase();
+            if (!val) return;
+
+            if (tempSelectedLeagues.length >= 10) {
+                if (warn) warn.classList.remove('hidden');
+                return;
+            }
+
+            if (!tempSelectedLeagues.includes(val)) {
+                tempSelectedLeagues.push(val);
+                input.value = '';
+                renderLeagueChips();
+            }
+        }
+
+        function openSettingsModal() {
+            tempSelectedLeagues = userConfig.footballLeagues ? [...userConfig.footballLeagues] : ['eng.1', 'esp.1', 'ger.1', 'ita.1', 'fra.1', 'uefa.champions'];
+            renderLeagueChips();
+            
+            // 載入「本地」與「體育」RSS 網址列表
+            setInputValue('setting-rss-local', (userConfig.rssUrlsLocal || []).join('\n'));
+            setInputValue('setting-rss-sports', (userConfig.rssUrlsSports || []).join('\n'));
+
+            const modal = document.getElementById('settings-modal');
+            if (modal) modal.classList.remove('hidden');
+        }
+
+        function closeSettingsModal() {
+            const modal = document.getElementById('settings-modal');
+            if (modal) modal.classList.add('hidden');
+            const qrWrapper = document.getElementById('qrcode-wrapper');
+            if (qrWrapper) qrWrapper.classList.add('hidden');
+            const warn = document.getElementById('league-warning-msg');
+            if (warn) warn.classList.add('hidden');
+        }
+
+        function updateStationOptions(lineCode, selectedSta = null) {
+            const staSelect = document.getElementById('setting-mtr-sta');
+            if (!staSelect) return;
+            staSelect.innerHTML = '';
+            
+            const stations = mtrStationsMap[lineCode] || [];
+            stations.forEach(sta => {
+                const opt = document.createElement('option');
+                opt.value = sta.c;
+                opt.textContent = `${sta.n} (${sta.c})`;
+                if (selectedSta === sta.c) opt.selected = true;
+                staSelect.appendChild(opt);
+            });
+        }
+
+        function loadSettings() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const urlSyncId = urlParams.get('sync');
+
+            const s = localStorage.getItem('dashCfg');
+            if (s && s.trim()) {
+                try { userConfig = {...userConfig, ...JSON.parse(s)}; } catch(e){ console.warn("Saved config parse error skipped:", e); }
+            }
+
+            if (urlSyncId) {
+                userConfig.syncId = urlSyncId.trim().toUpperCase();
+                localStorage.setItem('dashCfg', JSON.stringify(userConfig));
+            }
+
+            // 確保本地與體育 RSS 有預設值
+            if (!userConfig.rssUrlsLocal || userConfig.rssUrlsLocal.length === 0) {
+                userConfig.rssUrlsLocal = ['https://rthk.hk/rthk/news/rss/c_expressnews_clocal.xml'];
+            }
+            if (!userConfig.rssUrlsSports || userConfig.rssUrlsSports.length === 0) {
+                userConfig.rssUrlsSports = [
+                    'https://www.transfermarkt.co.uk/rss/news',
+                    'http://newsrss.bbc.co.uk/rss/sportonline_uk_edition/football/rss.xml'
+                ];
+            }
+
+            setInputValue('setting-sync-id', userConfig.syncId);
+            setInputValue('setting-finnhub-key', userConfig.finnhubApiKey);
+            setInputValue('setting-stocks', userConfig.stocks ? userConfig.stocks.join(', ') : '');
+            setInputValue('setting-mtr-line', userConfig.mtrLine);
+            
+            updateStationOptions(userConfig.mtrLine, userConfig.mtrSta);
+            updateNewsCategoryUI();
+
+            if (userConfig.syncId) {
+                setupCloudListener();
+            }
+        }
+
+        function saveSettings() {
+            const oldSyncId = userConfig.syncId;
+            userConfig.syncId = getInputValue('setting-sync-id').toUpperCase();
+            userConfig.finnhubApiKey = getInputValue('setting-finnhub-key');
+            
+            const stocksVal = getInputValue('setting-stocks');
+            userConfig.stocks = stocksVal ? stocksVal.split(',').map(s=>s.trim()).filter(s=>s) : [];
+            
+            userConfig.mtrLine = getInputValue('setting-mtr-line') || 'TML';
+            userConfig.mtrSta = getInputValue('setting-mtr-sta').toUpperCase() || 'TIS';
+
+            userConfig.footballLeagues = [...tempSelectedLeagues];
+
+            // 解析「本地」與「體育」RSS 網址列表
+            const rawRssLocal = getInputValue('setting-rss-local');
+            const rawRssSports = getInputValue('setting-rss-sports');
+
+            userConfig.rssUrlsLocal = rawRssLocal.split(/[\n,]+/).map(u => u.trim()).filter(u => u.length > 0);
+            if (userConfig.rssUrlsLocal.length === 0) {
+                userConfig.rssUrlsLocal = ['https://rthk.hk/rthk/news/rss/c_expressnews_clocal.xml'];
+            }
+
+            userConfig.rssUrlsSports = rawRssSports.split(/[\n,]+/).map(u => u.trim()).filter(u => u.length > 0);
+            if (userConfig.rssUrlsSports.length === 0) {
+                userConfig.rssUrlsSports = ['https://rthk.hk/rthk/news/rss/c_expressnews_csport.xml'];
+            }
+            
+            localStorage.setItem('dashCfg', JSON.stringify(userConfig));
+            closeSettingsModal(); 
+
+            if (userConfig.syncId !== oldSyncId) {
+                setupCloudListener();
+            }
+            
+            syncToCloud();
+            fetchAllData();
+        }
+
+        function fetchAllData() {
+            fetchStockData();
+            fetchTransportETA();
+            fetchFootballScores();
+            fetchLiveNews();
+            fetchHKOWeather();
+        }
+
+        window.onCloudReady = () => {
+            if (userConfig.syncId) {
+                setupCloudListener();
+            }
+        };
+
+        window.onload = () => {
+            loadSettings();
+            startClock();
+            requestGPSLocation();
+            fetchAllData();
+            
+            setInterval(fetchHKOWeather, 300000); // 5分鐘
+            setInterval(fetchStockData, 15000);   // 15秒
+            setInterval(fetchFootballScores, 60000); // 1分鐘
+            setInterval(fetchLiveNews, 1800000);     // 30分鐘（所有 RSS）
+            
+            setInterval(() => {
+                etaCountdown--;
+                if(etaCountdown <= 0) fetchTransportETA();
+                else {
+                    const timerEl = document.getElementById('eta-timer');
+                    if (timerEl) timerEl.textContent = `${etaCountdown}s 後刷新`;
+                }
+            }, 1000);
+        };
+    </script>
 </body>
 </html>
