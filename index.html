@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-HK">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>個人資訊看板</title>
+  <style>html,body{margin:0;background:#0f172a;color:#e2e8f0;font-family:system-ui,sans-serif}#status{min-height:100vh;display:grid;place-items:center;text-align:center;padding:24px}.spinner{width:34px;height:34px;border:3px solid #334155;border-top-color:#3b82f6;border-radius:50%;animation:s 1s linear infinite;margin:0 auto 14px}@keyframes s{to{transform:rotate(360deg)}}</style>
+</head>
+<body>
+<div id="status"><div><div class="spinner"></div><strong>載入個人資訊看板…</strong><div style="margin-top:8px;font-size:12px;color:#94a3b8">RSS Proxy 已連接・每 30 分鐘更新</div></div></div>
+<script>
+(async()=>{
+  try{
+    const paths=['.pages/dashboard.part0.b64','.pages/dashboard.part1.b64','.pages/dashboard.part2.b64'];
+    const parts=await Promise.all(paths.map(p=>fetch(p+'?v=20260831',{cache:'no-store'}).then(r=>{if(!r.ok)throw new Error(p+' '+r.status);return r.text()})));
+    const b64=parts.join('').replace(/\s+/g,'');
+    const raw=atob(b64);
+    const bytes=new Uint8Array(raw.length);
+    for(let i=0;i<raw.length;i++) bytes[i]=raw.charCodeAt(i);
+    if(!('DecompressionStream' in window)) throw new Error('Browser does not support gzip decompression');
+    const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+    const html=await new Response(stream).text();
+    document.open();document.write(html);document.close();
+  }catch(err){
+    console.error(err);
+    document.getElementById('status').innerHTML='<div><strong>資訊看板載入失敗</strong><div style="margin-top:10px;color:#94a3b8;font-size:13px">請重新整理頁面；如持續出現，請檢查 GitHub Pages 發佈設定。</div></div>';
+  }
+})();
+</script>
+</body>
+</html>
