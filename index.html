@@ -772,17 +772,54 @@
             fetchHKOWeather();
         }
 
+        async function tryNetworkLocation(requestSeq) {
+            if (requestSeq !== gpsRequestSeq) return false;
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 6000);
+            try {
+                const res = await fetch(`${RSS_PROXY_URL}/location`, {
+                    cache: 'no-store',
+                    signal: controller.signal
+                });
+                if (!res.ok) return false;
+                const data = await res.json();
+                const lat = Number(data.latitude);
+                const lng = Number(data.longitude);
+                if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+
+                const inHongKongArea = lat >= 21.8 && lat <= 22.7 && lng >= 113.8 && lng <= 114.6;
+                if (!inHongKongArea) return false;
+                if (requestSeq !== gpsRequestSeq) return false;
+
+                const nearest = findNearestWeatherStation(lat, lng);
+                gpsLocation = { lat, lng, name: nearest.name };
+                clearTimeout(gpsHardWatchdog);
+                gpsHardWatchdog = null;
+                setWeatherLocationLabel(nearest.name, '(網絡定位)');
+                fetchHKOWeather();
+                return true;
+            } catch (e) {
+                console.warn('Cloudflare network location unavailable:', e);
+                return false;
+            } finally {
+                clearTimeout(timer);
+            }
+        }
+
         function requestGPSLocation() {
             const requestSeq = ++gpsRequestSeq;
             clearTimeout(gpsHardWatchdog);
-            gpsHardWatchdog = setTimeout(() => {
+            gpsHardWatchdog = setTimeout(async () => {
                 if (requestSeq !== gpsRequestSeq) return;
+                const networkUsed = await tryNetworkLocation(requestSeq);
+                if (networkUsed || requestSeq !== gpsRequestSeq) return;
+
                 const last = loadCachedGPSLocation();
                 if (last) {
                     gpsLocation = { lat: last.lat, lng: last.lng, name: last.name };
-                    setWeatherLocationLabel(last.name, '(GPS暫時無回應)');
+                    setWeatherLocationLabel(last.name, '(上次位置；網絡定位失敗)');
                 } else {
-                    setWeatherLocationLabel(gpsLocation.name || '京士柏', '(GPS暫時無回應)');
+                    setWeatherLocationLabel(gpsLocation.name || '京士柏', '(網絡定位失敗)');
                 }
                 fetchHKOWeather();
             }, 15000);
@@ -801,11 +838,13 @@
                 return;
             }
 
-            const finalFallback = (err) => {
+            const finalFallback = async (err) => {
                 if (requestSeq !== gpsRequestSeq) return;
                 clearTimeout(gpsHardWatchdog);
                 gpsHardWatchdog = null;
                 console.warn('GPS Location unavailable:', err);
+                const networkUsed = await tryNetworkLocation(requestSeq);
+                if (networkUsed || requestSeq !== gpsRequestSeq) return;
                 const last = loadCachedGPSLocation();
                 if (last) {
                     gpsLocation = { lat: last.lat, lng: last.lng, name: last.name };

@@ -132,6 +132,22 @@ export default {
       return jsonResponse(request, env, { ok: false, error: 'Method not allowed.' }, 405);
     }
 
+    if (reqUrl.pathname === '/location') {
+      const cf = request.cf || {};
+      const latitude = Number(cf.latitude);
+      const longitude = Number(cf.longitude);
+      const hasCoordinates = Number.isFinite(latitude) && Number.isFinite(longitude);
+      return jsonResponse(request, env, {
+        ok: hasCoordinates,
+        source: 'cloudflare-network',
+        latitude: hasCoordinates ? latitude : null,
+        longitude: hasCoordinates ? longitude : null,
+        city: cf.city || '',
+        region: cf.region || '',
+        country: cf.country || '',
+      }, hasCoordinates ? 200 : 503);
+    }
+
     if (reqUrl.pathname === '/' || reqUrl.pathname === '/health') {
       return jsonResponse(request, env, {
         ok: true,
