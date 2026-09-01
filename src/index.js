@@ -33,6 +33,12 @@ function jsonResponse(request, env, data, status = 200) {
   });
 }
 
+function isHongKongArea(latitude, longitude) {
+  return Number.isFinite(latitude) && Number.isFinite(longitude) &&
+    latitude >= 21.8 && latitude <= 22.7 &&
+    longitude >= 113.8 && longitude <= 114.6;
+}
+
 function isPrivateIpv4(host) {
   const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (!m) return false;
@@ -137,15 +143,17 @@ export default {
       const latitude = Number(cf.latitude);
       const longitude = Number(cf.longitude);
       const hasCoordinates = Number.isFinite(latitude) && Number.isFinite(longitude);
+      const inHongKongArea = hasCoordinates && isHongKongArea(latitude, longitude);
       return jsonResponse(request, env, {
-        ok: hasCoordinates,
+        ok: inHongKongArea,
         source: 'cloudflare-network',
-        latitude: hasCoordinates ? latitude : null,
-        longitude: hasCoordinates ? longitude : null,
+        latitude: inHongKongArea ? latitude : null,
+        longitude: inHongKongArea ? longitude : null,
         city: cf.city || '',
         region: cf.region || '',
         country: cf.country || '',
-      }, hasCoordinates ? 200 : 503);
+        reason: inHongKongArea ? null : (hasCoordinates ? 'outside-hong-kong' : 'coordinates-unavailable'),
+      });
     }
 
     if (reqUrl.pathname === '/' || reqUrl.pathname === '/health') {
