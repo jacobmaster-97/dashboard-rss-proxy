@@ -717,43 +717,108 @@
         }
 
         /* ================== GPS GEOLOCATION ================== */
-        function requestGPSLocation() {
-            const locLabel = document.getElementById('weather-location');
-            if (locLabel) locLabel.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 定位中...';
+        let gpsRequestSeq = 0;
+        const GPS_CACHE_KEY = 'dashboardGpsLastPosition';
 
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(
-                    (pos) => {
-                        const lat = pos.coords.latitude;
-                        const lng = pos.coords.longitude;
-                        
-                        let nearest = weatherStations[0];
-                        let minDist = Infinity;
-                        weatherStations.forEach(st => {
-                            const d = Math.hypot(st.lat - lat, st.lng - lng);
-                            if (d < minDist) {
-                                minDist = d;
-                                nearest = st;
-                            }
-                        });
-                        
-                        gpsLocation = { lat, lng, name: nearest.name };
-                        if (locLabel) locLabel.innerHTML = `<i class="fa-solid fa-location-dot"></i> ${nearest.name}`;
-                        fetchHKOWeather();
-                    },
-                    (err) => {
-                        console.warn("GPS Location error or denied:", err);
-                        gpsLocation = { lat: 22.3119, lng: 114.1728, name: '京士柏' };
-                        if (locLabel) locLabel.innerHTML = `<i class="fa-solid fa-location-dot"></i> 京士柏 (預設)`;
-                        fetchHKOWeather();
-                    },
-                    { timeout: 8000 }
-                );
-            } else {
-                gpsLocation = { lat: 22.3119, lng: 114.1728, name: '京士柏' };
-                if (locLabel) locLabel.innerHTML = `<i class="fa-solid fa-location-dot"></i> 京士柏`;
-                fetchHKOWeather();
+        function findNearestWeatherStation(lat, lng) {
+            let nearest = weatherStations[0];
+            let minDist = Infinity;
+            weatherStations.forEach(st => {
+                const d = Math.hypot(st.lat - lat, st.lng - lng);
+                if (d < minDist) {
+                    minDist = d;
+                    nearest = st;
+                }
+            });
+            return nearest;
+        }
+
+        function setWeatherLocationLabel(name, note = '', spinning = false) {
+            const locLabel = document.getElementById('weather-location');
+            if (!locLabel) return;
+            const icon = spinning
+                ? '<i class="fa-solid fa-spinner fa-spin"></i>'
+                : '<i class="fa-solid fa-location-dot"></i>';
+            locLabel.innerHTML = `${icon} ${name}${note ? ` ${note}` : ''}`;
+        }
+
+        function loadCachedGPSLocation() {
+            try {
+                const cached = JSON.parse(localStorage.getItem(GPS_CACHE_KEY) || 'null');
+                if (!cached || !Number.isFinite(cached.lat) || !Number.isFinite(cached.lng) || !cached.name) return null;
+                return cached;
+            } catch (e) {
+                return null;
             }
+        }
+
+        function saveCachedGPSLocation(location) {
+            try {
+                localStorage.setItem(GPS_CACHE_KEY, JSON.stringify({ ...location, savedAt: Date.now() }));
+            } catch (e) {}
+        }
+
+        function applyGPSPosition(pos, requestSeq) {
+            if (requestSeq !== gpsRequestSeq) return;
+            const lat = pos.coords.latitude;
+            const lng = pos.coords.longitude;
+            const nearest = findNearestWeatherStation(lat, lng);
+            gpsLocation = { lat, lng, name: nearest.name };
+            saveCachedGPSLocation(gpsLocation);
+            setWeatherLocationLabel(nearest.name);
+            fetchHKOWeather();
+        }
+
+        function requestGPSLocation() {
+            const requestSeq = ++gpsRequestSeq;
+            const cached = loadCachedGPSLocation();
+
+            if (cached) {
+                gpsLocation = { lat: cached.lat, lng: cached.lng, name: cached.name };
+                setWeatherLocationLabel(cached.name, '(上次位置)', true);
+            } else {
+                setWeatherLocationLabel(gpsLocation.name || '京士柏', '(更新定位中)', true);
+            }
+
+            if (!navigator.geolocation) {
+                setWeatherLocationLabel(gpsLocation.name || '京士柏', '(GPS不支援)');
+                fetchHKOWeather();
+                return;
+            }
+
+            const finalFallback = (err) => {
+                if (requestSeq !== gpsRequestSeq) return;
+                console.warn('GPS Location unavailable:', err);
+                const last = loadCachedGPSLocation();
+                if (last) {
+                    gpsLocation = { lat: last.lat, lng: last.lng, name: last.name };
+                    setWeatherLocationLabel(last.name, '(上次位置)');
+                } else {
+                    gpsLocation = { lat: 22.3119, lng: 114.1728, name: '京士柏' };
+                    const note = err && err.code === 1 ? '(GPS未授權)' : '(預設)';
+                    setWeatherLocationLabel('京士柏', note);
+                }
+                fetchHKOWeather();
+            };
+
+            navigator.geolocation.getCurrentPosition(
+                (pos) => applyGPSPosition(pos, requestSeq),
+                (fastErr) => {
+                    if (requestSeq !== gpsRequestSeq) return;
+                    if (fastErr && fastErr.code === 1) {
+                        finalFallback(fastErr);
+                        return;
+                    }
+                    const currentName = gpsLocation.name || '京士柏';
+                    setWeatherLocationLabel(currentName, '(正更新GPS)', true);
+                    navigator.geolocation.getCurrentPosition(
+                        (pos) => applyGPSPosition(pos, requestSeq),
+                        finalFallback,
+                        { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+                    );
+                },
+                { enableHighAccuracy: false, timeout: 4500, maximumAge: 600000 }
+            );
         }
 
         /* ================== WEATHER API ================== */
