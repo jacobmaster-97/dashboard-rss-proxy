@@ -1,0 +1,142 @@
+name: Add network location fallback
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-network-location.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Add Worker location endpoint and dashboard fallback
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          # 1) Cloudflare Worker: expose request.cf coarse network geolocation.
+          wp = Path('src/index.js')
+          w = wp.read_text(encoding='utf-8')
+          if "reqUrl.pathname === '/location'" not in w:
+              marker = "    if (reqUrl.pathname === '/' || reqUrl.pathname === '/health') {"
+              location_route = '''    if (reqUrl.pathname === '/location') {
+      const cf = request.cf || {};
+      const latitude = Number(cf.latitude);
+      const longitude = Number(cf.longitude);
+      const hasCoordinates = Number.isFinite(latitude) && Number.isFinite(longitude);
+      return jsonResponse(request, env, {
+        ok: hasCoordinates,
+        source: 'cloudflare-network',
+        latitude: hasCoordinates ? latitude : null,
+        longitude: hasCoordinates ? longitude : null,
+        city: cf.city || '',
+        region: cf.region || '',
+        country: cf.country || '',
+      }, hasCoordinates ? 200 : 503);
+    }
+
+'''
+              if marker not in w:
+                  raise SystemExit('Worker insertion marker not found')
+              w = w.replace(marker, location_route + marker, 1)
+              wp.write_text(w, encoding='utf-8')
+
+          # 2) Dashboard: GPS -> cached GPS -> Cloudflare network location -> default.
+          hp = Path('index.html')
+          s = hp.read_text(encoding='utf-8')
+
+          if 'async function tryNetworkLocation' not in s:
+              marker = '        function requestGPSLocation() {'
+              helper = '''        async function tryNetworkLocation(requestSeq) {
+            if (requestSeq !== gpsRequestSeq) return false;
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 6000);
+            try {
+                const res = await fetch(`${RSS_PROXY_URL}/location`, {
+                    cache: 'no-store',
+                    signal: controller.signal
+                });
+                if (!res.ok) return false;
+                const data = await res.json();
+                const lat = Number(data.latitude);
+                const lng = Number(data.longitude);
+                if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+
+                // Dashboard weather stations are Hong Kong only. Avoid mapping a remote/VPN exit to a HK station.
+                const inHongKongArea = lat >= 21.8 && lat <= 22.7 && lng >= 113.8 && lng <= 114.6;
+                if (!inHongKongArea) return false;
+                if (requestSeq !== gpsRequestSeq) return false;
+
+                const nearest = findNearestWeatherStation(lat, lng);
+                gpsLocation = { lat, lng, name: nearest.name };
+                clearTimeout(gpsHardWatchdog);
+                gpsHardWatchdog = null;
+                setWeatherLocationLabel(nearest.name, '(網絡定位)');
+                fetchHKOWeather();
+                return true;
+            } catch (e) {
+                console.warn('Cloudflare network location unavailable:', e);
+                return false;
+            } finally {
+                clearTimeout(timer);
+            }
+        }
+
+'''
+              if marker not in s:
+                  raise SystemExit('Dashboard helper marker not found')
+              s = s.replace(marker, helper + marker, 1)
+
+          # Replace hard watchdog callback so it tries network location first.
+          pattern = re.compile(r"            gpsHardWatchdog = setTimeout\(\(\) => \{.*?            \}, 15000\);", re.S)
+          replacement = '''            gpsHardWatchdog = setTimeout(async () => {
+                if (requestSeq !== gpsRequestSeq) return;
+                const networkUsed = await tryNetworkLocation(requestSeq);
+                if (networkUsed || requestSeq !== gpsRequestSeq) return;
+
+                const last = loadCachedGPSLocation();
+                if (last) {
+                    gpsLocation = { lat: last.lat, lng: last.lng, name: last.name };
+                    setWeatherLocationLabel(last.name, '(上次位置；網絡定位失敗)');
+                } else {
+                    setWeatherLocationLabel(gpsLocation.name || '京士柏', '(網絡定位失敗)');
+                }
+                fetchHKOWeather();
+            }, 15000);'''
+          s2, n = pattern.subn(replacement, s, count=1)
+          if n != 1:
+              raise SystemExit(f'Watchdog replacement count: {n}')
+          s = s2
+
+          # GPS error callback also tries network location before cached/default fallback.
+          if "const finalFallback = async (err) =>" not in s:
+              s = s.replace("            const finalFallback = (err) => {", "            const finalFallback = async (err) => {", 1)
+              needle = "                console.warn('GPS Location unavailable:', err);\n"
+              addition = "                const networkUsed = await tryNetworkLocation(requestSeq);\n                if (networkUsed || requestSeq !== gpsRequestSeq) return;\n"
+              if needle not in s:
+                  raise SystemExit('GPS fallback insertion marker not found')
+              s = s.replace(needle, needle + addition, 1)
+
+          hp.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Commit location fallback
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/index.js index.html
+          if git diff --cached --quiet; then
+            echo "No changes needed"
+          else
+            git commit -m "Add Cloudflare network location fallback"
+            git push
+          fi
