@@ -718,6 +718,7 @@
 
         /* ================== GPS GEOLOCATION ================== */
         let gpsRequestSeq = 0;
+        let gpsHardWatchdog = null;
         const GPS_CACHE_KEY = 'dashboardGpsLastPosition';
 
         function findNearestWeatherStation(lat, lng) {
@@ -760,6 +761,8 @@
 
         function applyGPSPosition(pos, requestSeq) {
             if (requestSeq !== gpsRequestSeq) return;
+            clearTimeout(gpsHardWatchdog);
+            gpsHardWatchdog = null;
             const lat = pos.coords.latitude;
             const lng = pos.coords.longitude;
             const nearest = findNearestWeatherStation(lat, lng);
@@ -771,6 +774,18 @@
 
         function requestGPSLocation() {
             const requestSeq = ++gpsRequestSeq;
+            clearTimeout(gpsHardWatchdog);
+            gpsHardWatchdog = setTimeout(() => {
+                if (requestSeq !== gpsRequestSeq) return;
+                const last = loadCachedGPSLocation();
+                if (last) {
+                    gpsLocation = { lat: last.lat, lng: last.lng, name: last.name };
+                    setWeatherLocationLabel(last.name, '(GPS暫時無回應)');
+                } else {
+                    setWeatherLocationLabel(gpsLocation.name || '京士柏', '(GPS暫時無回應)');
+                }
+                fetchHKOWeather();
+            }, 15000);
             const cached = loadCachedGPSLocation();
 
             if (cached) {
@@ -788,6 +803,8 @@
 
             const finalFallback = (err) => {
                 if (requestSeq !== gpsRequestSeq) return;
+                clearTimeout(gpsHardWatchdog);
+                gpsHardWatchdog = null;
                 console.warn('GPS Location unavailable:', err);
                 const last = loadCachedGPSLocation();
                 if (last) {
