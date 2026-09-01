@@ -941,6 +941,7 @@
             stopActiveGPSWatch();
             if (activeNetworkController) activeNetworkController.abort();
 
+            const previousStationName = selectedWeatherStation.name;
             const cached = loadCachedGPSLocation();
             locationPriority = LOCATION_PRIORITY['預設'];
             if (cached) {
@@ -954,6 +955,7 @@
                 locationDetail = '正在背景嘗試 GPS 與網絡定位';
             }
             renderWeatherLocationLabel();
+            if (selectedWeatherStation.name !== previousStationName) fetchHKOWeather();
 
             // Both paths start immediately. Source priority guarantees that valid GPS wins.
             void resolveNetworkLocation(requestSeq);
