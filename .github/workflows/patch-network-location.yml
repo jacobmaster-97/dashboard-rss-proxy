@@ -17,126 +17,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Add Worker location endpoint and dashboard fallback
+      - name: Apply network location patch
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          import re
-
-          # 1) Cloudflare Worker: expose request.cf coarse network geolocation.
-          wp = Path('src/index.js')
-          w = wp.read_text(encoding='utf-8')
-          if "reqUrl.pathname === '/location'" not in w:
-              marker = "    if (reqUrl.pathname === '/' || reqUrl.pathname === '/health') {"
-              location_route = '''    if (reqUrl.pathname === '/location') {
-      const cf = request.cf || {};
-      const latitude = Number(cf.latitude);
-      const longitude = Number(cf.longitude);
-      const hasCoordinates = Number.isFinite(latitude) && Number.isFinite(longitude);
-      return jsonResponse(request, env, {
-        ok: hasCoordinates,
-        source: 'cloudflare-network',
-        latitude: hasCoordinates ? latitude : null,
-        longitude: hasCoordinates ? longitude : null,
-        city: cf.city || '',
-        region: cf.region || '',
-        country: cf.country || '',
-      }, hasCoordinates ? 200 : 503);
-    }
-
-'''
-              if marker not in w:
-                  raise SystemExit('Worker insertion marker not found')
-              w = w.replace(marker, location_route + marker, 1)
-              wp.write_text(w, encoding='utf-8')
-
-          # 2) Dashboard: GPS -> cached GPS -> Cloudflare network location -> default.
-          hp = Path('index.html')
-          s = hp.read_text(encoding='utf-8')
-
-          if 'async function tryNetworkLocation' not in s:
-              marker = '        function requestGPSLocation() {'
-              helper = '''        async function tryNetworkLocation(requestSeq) {
-            if (requestSeq !== gpsRequestSeq) return false;
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 6000);
-            try {
-                const res = await fetch(`${RSS_PROXY_URL}/location`, {
-                    cache: 'no-store',
-                    signal: controller.signal
-                });
-                if (!res.ok) return false;
-                const data = await res.json();
-                const lat = Number(data.latitude);
-                const lng = Number(data.longitude);
-                if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
-
-                // Dashboard weather stations are Hong Kong only. Avoid mapping a remote/VPN exit to a HK station.
-                const inHongKongArea = lat >= 21.8 && lat <= 22.7 && lng >= 113.8 && lng <= 114.6;
-                if (!inHongKongArea) return false;
-                if (requestSeq !== gpsRequestSeq) return false;
-
-                const nearest = findNearestWeatherStation(lat, lng);
-                gpsLocation = { lat, lng, name: nearest.name };
-                clearTimeout(gpsHardWatchdog);
-                gpsHardWatchdog = null;
-                setWeatherLocationLabel(nearest.name, '(網絡定位)');
-                fetchHKOWeather();
-                return true;
-            } catch (e) {
-                console.warn('Cloudflare network location unavailable:', e);
-                return false;
-            } finally {
-                clearTimeout(timer);
-            }
-        }
-
-'''
-              if marker not in s:
-                  raise SystemExit('Dashboard helper marker not found')
-              s = s.replace(marker, helper + marker, 1)
-
-          # Replace hard watchdog callback so it tries network location first.
-          pattern = re.compile(r"            gpsHardWatchdog = setTimeout\(\(\) => \{.*?            \}, 15000\);", re.S)
-          replacement = '''            gpsHardWatchdog = setTimeout(async () => {
-                if (requestSeq !== gpsRequestSeq) return;
-                const networkUsed = await tryNetworkLocation(requestSeq);
-                if (networkUsed || requestSeq !== gpsRequestSeq) return;
-
-                const last = loadCachedGPSLocation();
-                if (last) {
-                    gpsLocation = { lat: last.lat, lng: last.lng, name: last.name };
-                    setWeatherLocationLabel(last.name, '(上次位置；網絡定位失敗)');
-                } else {
-                    setWeatherLocationLabel(gpsLocation.name || '京士柏', '(網絡定位失敗)');
-                }
-                fetchHKOWeather();
-            }, 15000);'''
-          s2, n = pattern.subn(replacement, s, count=1)
-          if n != 1:
-              raise SystemExit(f'Watchdog replacement count: {n}')
-          s = s2
-
-          # GPS error callback also tries network location before cached/default fallback.
-          if "const finalFallback = async (err) =>" not in s:
-              s = s.replace("            const finalFallback = (err) => {", "            const finalFallback = async (err) => {", 1)
-              needle = "                console.warn('GPS Location unavailable:', err);\n"
-              addition = "                const networkUsed = await tryNetworkLocation(requestSeq);\n                if (networkUsed || requestSeq !== gpsRequestSeq) return;\n"
-              if needle not in s:
-                  raise SystemExit('GPS fallback insertion marker not found')
-              s = s.replace(needle, needle + addition, 1)
-
-          hp.write_text(s, encoding='utf-8')
-          PY
+          echo 'CmZyb20gcGF0aGxpYiBpbXBvcnQgUGF0aAppbXBvcnQgcmUKCndwID0gUGF0aCgic3JjL2luZGV4LmpzIikKdyA9IHdwLnJlYWRfdGV4dChlbmNvZGluZz0idXRmLTgiKQppZiAicmVxVXJsLnBhdGhuYW1lID09ICcvbG9jYXRpb24nIiBub3QgaW4gdzogCiAgICBtYXJrZXIgPSAiICAgIGlmIChyZXFVcmwucGF0aG5hbWUgPT09ICcvJyB8fCByZXFVcmwucGF0aG5hbWUgPT09ICcvaGVhbHRoJykgeyIKICAgIHJvdXRlID0gIiIiICAgIGlmIChyZXFVcmwucGF0aG5hbWUgPT09ICcvbG9jYXRpb24nKSB7CiAgICAgIGNvbnN0IGNmID0gcmVxdWVzdC5jZiB8fCB7fTsKICAgICAgY29uc3QgbGF0aXR1ZGUgPSBOdW1iZXIoY2YubGF0aXR1ZGUpOwogICAgICBjb25zdCBsb25naXR1ZGUgPSBOdW1iZXIoY2YubG9uZ2l0dWRlKTsKICAgICAgY29uc3QgaGFzQ29vcmRpbmF0ZXMgPSBOdW1iZXIuaXNGaW5pdGUobGF0aXR1ZGUpICYmIE51bWJlci5pc0Zpbml0ZShsb25naXR1ZGUpOwogICAgICByZXR1cm4ganNvblJlc3BvbnNlKHJlcXVlc3QsIGVudiwgewogICAgICAgIG9rOiBoYXNDb29yZGluYXRlcywKICAgICAgICBzb3VyY2U6ICdjbG91ZGZsYXJlLW5ldHdvcmsnLAogICAgICAgIGxhdGl0dWRlOiBoYXNDb29yZGluYXRlcyA/IGxhdGl0dWRlIDogbnVsbCwKICAgICAgICBsb25naXR1ZGU6IGhhc0Nvb3JkaW5hdGVzID8gbG9uZ2l0dWRlIDogbnVsbCwKICAgICAgICBjaXR5OiBjZi5jaXR5IHx8ICcnLAogICAgICAgIHJlZ2lvbjogY2YucmVnaW9uIHx8ICcnLAogICAgICAgIGNvdW50cnk6IGNmLmNvdW50cnkgfHwgJycsCiAgICAgIH0sIGhhc0Nvb3JkaW5hdGVzID8gMjAwIDogNTAzKTsKICAgIH0KCiIiIgogICAgaWYgbWFya2VyIG5vdCBpbiB3OgogICAgICAgIHJhaXNlIFN5c3RlbUV4aXQoIldvcmtlciBtYXJrZXIgbWlzc2luZyIpCiAgICB3ID0gdy5yZXBsYWNlKG1hcmtlciwgcm91dGUgKyBtYXJrZXIsIDEpCiAgICB3cC53cml0ZV90ZXh0KHcsIGVuY29kaW5nPSJ1dGYtOCIpCgpo cCA9IFBhdGgoImluZGV4Lmh0bWwiKQpzID0gaHAucmVhZF90ZXh0KGVuY29kaW5nPSJ1dGYtOCIpCgppZiAiYXN5bmMgZnVuY3Rpb24gdHJ5TmV0d29ya0xvY2F0aW9uIiBub3QgaW4gczoKICAgIG1hcmtlciA9ICIgICAgICAgIGZ1bmN0aW9uIHJlcXVlc3RHUFNMb2NhdGlvbigpIHsiCiAgICBoZWxwZXIgPSAiIiIgICAgICAgIGFzeW5jIGZ1bmN0aW9uIHRyeU5ldHdvcmtMb2NhdGlvbihyZXF1ZXN0U2VxKSB7CiAgICAgICAgICAgIGlmIChyZXF1ZXN0U2VxICE9PSBncHNSZXF1ZXN0U2VxKSByZXR1cm4gZmFsc2U7CiAgICAgICAgICAgIGNvbnN0IGNvbnRyb2xsZXIgPSBuZXcgQWJvcnRDb250cm9sbGVyKCk7CiAgICAgICAgICAgIGNvbnN0IHRpbWVyID0gc2V0VGltZW91dCgoKSA9PiBjb250cm9sbGVyLmFib3J0KCksIDYwMDApOwogICAgICAgICAgICB0cnkgewogICAgICAgICAgICAgICAgY29uc3QgcmVzID0gYXdhaXQgZmV0Y2goYCR7UlNTX1BST1hZX1VSTH0vbG9jYXRpb25gLCB7CiAgICAgICAgICAgICAgICAgICAgY2FjaGU6ICduby1zdG9yZScsCiAgICAgICAgICAgICAgICAgICAgc2lnbmFsOiBjb250cm9sbGVyLnNpZ25hbAogICAgICAgICAgICAgICAgfSk7CiAgICAgICAgICAgICAgICBpZiAoIXJlcy5vaykgcmV0dXJuIGZhbHNlOwogICAgICAgICAgICAgICAgY29uc3QgZGF0YSA9IGF3YWl0IHJlcy5qc29uKCk7CiAgICAgICAgICAgICAgICBjb25zdCBsYXQgPSBOdW1iZXIoZGF0YS5sYXRpdHVkZSk7CiAgICAgICAgICAgICAgICBjb25zdCBsbmcgPSBOdW1iZXIoZGF0YS5sb25naXR1ZGUpOwogICAgICAgICAgICAgICAgaWYgKCFOdW1iZXIuaXNGaW5pdGUobGF0KSB8fCAhTnVtYmVyLmlzRmluaXRlKGxuZykpIHJldHVybiBmYWxzZTsKCiAgICAgICAgICAgICAgICBjb25zdCBpbkhvbmdLb25nQXJlYSA9IGxhdCA+PSAyMS44ICYmIGxhdCA8PSAyMi43ICYmIGxuZyA+PSAxMTMuOCAmJiBsbmcgPD0gMTE0LjY7CiAgICAgICAgICAgICAgICBpZiAoIWluSG9uZ0tvbmdBcmVhKSByZXR1cm4gZmFsc2U7CiAgICAgICAgICAgICAgICBpZiAocmVxdWVzdFNlcSAhPT0gZ3BzUmVxdWVzdFNlcSkgcmV0dXJuIGZhbHNlOwoKICAgICAgICAgICAgICAgIGNvbnN0IG5lYXJlc3QgPSBmaW5kTmVhcmVzdFdlYXRoZXJTdGF0aW9uKGxhdCwgbG5nKTsKICAgICAgICAgICAgICAgIGdwc0xvY2F0aW9uID0geyBsYXQsIGxuZywgbmFtZTogbmVhcmVzdC5uYW1lIH07CiAgICAgICAgICAgICAgICBjbGVhclRpbWVvdXQoZ3BzSGFyZFdhdGNoZG9nKTsKICAgICAgICAgICAgICAgIGdwc0hhcmRXYXRjaGRvZyA9IG51bGw7CiAgICAgICAgICAgICAgICBzZXRXZWF0aGVyTG9jYXRpb25MYWJlbChuZWFyZXN0Lm5hbWUsICco57ay57Wh5a6a5L2NKScpOwogICAgICAgICAgICAgICAgZmV0Y2hIS09XZWF0aGVyKCk7CiAgICAgICAgICAgICAgICByZXR1cm4gdHJ1ZTsKICAgICAgICAgICAgfSBjYXRjaCAoZSkgewogICAgICAgICAgICAgICAgY29uc29sZS53YXJuKCdDbG91ZGZsYXJlIG5ldHdvcmsgbG9jYXRpb24gdW5hdmFpbGFibGU6JywgZSk7CiAgICAgICAgICAgICAgICByZXR1cm4gZmFsc2U7CiAgICAgICAgICAgIH0gZmluYWxseSB7CiAgICAgICAgICAgICAgICBjbGVhclRpbWVvdXQodGltZXIpOwogICAgICAgICAgICB9CiAgICAgICAgfQoKIiIiCiAgICBpZiBtYXJrZXIgbm90IGluIHM6CiAgICAgICAgcmFpc2UgU3lzdGVtRXhpdCgiRGFzaGJvYXJkIGhlbHBlciBtYXJrZXIgbWlzc2luZyIpCiAgICBzID0gcy5yZXBsYWNlKG1hcmtlciwgaGVscGVyICsgbWFya2VyLCAxKQoKcGF0dGVybiA9IHJlLmNvbXBpbGUociIgICAgICAgICAgICBncHNIYXJkV2F0Y2hkb2cgPSBzZXRUaW1lb3V0XChcKFwpID0+IFx7Lio/ICAgICAgICAgICAgXH0sIDE1MDAwXFwpOyIsIHJlLlMpCnJlcGxhY2VtZW50ID0gIiIiICAgICAgICAgICAgZ3BzSGFyZFdhdGNoZG9nID0gc2V0VGltZW91dChhc3luYyAoKSA9PiB7CiAgICAgICAgICAgICAgICBpZiAocmVxdWVzdFNlcSAhPT0gZ3BzUmVxdWVzdFNlcSkgcmV0dXJuOwogICAgICAgICAgICAgICAgY29uc3QgbmV0d29ya1VzZWQgPSBhd2FpdCB0cnlOZXR3b3JrTG9jYXRpb24ocmVxdWVzdFNlcSk7CiAgICAgICAgICAgICAgICBpZiAobmV0d29ya1VzZWQgfHwgcmVxdWVzdFNlcSAhPT0gZ3BzUmVxdWVzdFNlcSkgcmV0dXJuOwoKICAgICAgICAgICAgICAgIGNvbnN0IGxhc3QgPSBsb2FkQ2FjaGVkR1BTTG9jYXRpb24oKTsKICAgICAgICAgICAgICAgIGlmIChsYXN0KSB7CiAgICAgICAgICAgICAgICAgICAgZ3BzTG9jYXRpb24gPSB7IGxhdDogbGFzdC5sYXQsIGxuZzogbGFzdC5sbmcsIG5hbWU6IGxhc3QubmFtZSB9OwogICAgICAgICAgICAgICAgICAgIHNldFdlYXRoZXJMb2NhdGlvbkxhYmVsKGxhc3QubmFtZSwgJyjkuIrmrKHkvY3nva7vvJvntLLntKHlrprkvY3lpLHmmZcpJyk7CiAgICAgICAgICAgICAgICB9IGVsc2UgewogICAgICAgICAgICAgICAgICAgIHNldFdlYXRoZXJMb2NhdGlvbkxhYmVsKGdwc0xvY2F0aW9uLm5hbWUgfHwgJ+S6rOWjq+afjycsICco57ay57Wh5a6a5L2N5aSx5pWXKScpOwogICAgICAgICAgICAgICAgfQogICAgICAgICAgICAgICAgZmV0Y2hIS09XZWF0aGVyKCk7CiAgICAgICAgICAgIH0sIDE1MDAwKTsiIiIKczIsIG4gPSBwYXR0ZXJuLnN1Ym4ocmVwbGFjZW1lbnQsIHMsIGNvdW50PTEpCmlmIG4gIT0gMToKICAgIHJhaXNlIFN5c3RlbUV4aXQoZiJXYXRjaGRvZyByZXBsYWNlbWVudCBjb3VudD17bn0iKQpzID0gczIKCmlmICJjb25zdCBmaW5hbEZhbGxiYWNrID0gYXN5bmMgKGVycikgPT4iIG5vdCBpbiBzOgogICAgcyA9IHMucmVwbGFjZSgiICAgICAgICAgICAgY29uc3QgZmluYWxGYWxsYmFjayA9IChlcnIpID0+IHsiLCAiICAgICAgICAgICAgY29uc3QgZmluYWxGYWxsYmFjayA9IGFzeW5jIChlcnIpID0+IHsiLCAxKQogICAgbmVlZGxlID0gIiAgICAgICAgICAgICAgICBjb25zb2xlLndhcm4oJ0dQUyBMb2NhdGlvbiB1bmF2YWlsYWJsZTonLCBlcnIpO1xuIgogICAgYWRkaXRpb24gPSAiICAgICAgICAgICAgICAgIGNvbnN0IG5ldHdvcmtVc2VkID0gYXdhaXQgdHJ5TmV0d29ya0xvY2F0aW9uKHJlcXVlc3RTZXEpO1xuICAgICAgICAgICAgICAgIGlmIChuZXR3b3JrVXNlZCB8fCByZXF1ZXN0U2VxICE9PSBncHNSZXF1ZXN0U2VxKSByZXR1cm47XG4iCiAgICBpZiBuZWVkbGUgbm90IGluIHM6CiAgICAgICAgcmFpc2UgU3lzdGVtRXhpdCgiRmFsbGJhY2sgbWFya2VyIG1pc3NpbmciKQogICAgcyA9IHMucmVwbGFjZShuZWVkbGUsIG5lZWRsZSArIGFkZGl0aW9uLCAxKQoKaHAud3JpdGVfdGV4dChzLCBlbmNvZGluZz0idXRmLTgiKQo=' | tr -d ' ' | base64 -d > /tmp/patch.py
+          python /tmp/patch.py
 
       - name: Commit location fallback
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/index.js index.html
-          if git diff --cached --quiet; then
-            echo "No changes needed"
-          else
-            git commit -m "Add Cloudflare network location fallback"
-            git push
-          fi
+          git commit -m "Add Cloudflare network location fallback"
+          git push
