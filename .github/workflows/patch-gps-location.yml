@@ -18,9 +18,10 @@ jobs:
           fetch-depth: 0
 
       - name: Patch GPS logic
-        shell: python
         run: |
+          python - <<'PY'
           from pathlib import Path
+          import base64
 
           path = Path('index.html')
           text = path.read_text(encoding='utf-8')
@@ -28,124 +29,13 @@ jobs:
           end_marker = '/* ================== WEATHER API ================== */'
           start = text.index(start_marker)
           end = text.index(end_marker, start)
-
-          new_block = r'''/* ================== GPS GEOLOCATION ================== */
-        let gpsRequestSeq = 0;
-        const GPS_CACHE_KEY = 'dashboardGpsLastPosition';
-
-        function findNearestWeatherStation(lat, lng) {
-            let nearest = weatherStations[0];
-            let minDist = Infinity;
-            weatherStations.forEach(st => {
-                const d = Math.hypot(st.lat - lat, st.lng - lng);
-                if (d < minDist) {
-                    minDist = d;
-                    nearest = st;
-                }
-            });
-            return nearest;
-        }
-
-        function setWeatherLocationLabel(name, note = '', spinning = false) {
-            const locLabel = document.getElementById('weather-location');
-            if (!locLabel) return;
-            const icon = spinning
-                ? '<i class="fa-solid fa-spinner fa-spin"></i>'
-                : '<i class="fa-solid fa-location-dot"></i>';
-            locLabel.innerHTML = `${icon} ${name}${note ? ` ${note}` : ''}`;
-        }
-
-        function loadCachedGPSLocation() {
-            try {
-                const cached = JSON.parse(localStorage.getItem(GPS_CACHE_KEY) || 'null');
-                if (!cached || !Number.isFinite(cached.lat) || !Number.isFinite(cached.lng) || !cached.name) return null;
-                return cached;
-            } catch (e) {
-                return null;
-            }
-        }
-
-        function saveCachedGPSLocation(location) {
-            try {
-                localStorage.setItem(GPS_CACHE_KEY, JSON.stringify({ ...location, savedAt: Date.now() }));
-            } catch (e) {
-                // localStorage unavailable: GPS still works normally.
-            }
-        }
-
-        function applyGPSPosition(pos, requestSeq) {
-            if (requestSeq !== gpsRequestSeq) return;
-            const lat = pos.coords.latitude;
-            const lng = pos.coords.longitude;
-            const nearest = findNearestWeatherStation(lat, lng);
-            gpsLocation = { lat, lng, name: nearest.name };
-            saveCachedGPSLocation(gpsLocation);
-            setWeatherLocationLabel(nearest.name);
-            fetchHKOWeather();
-        }
-
-        function requestGPSLocation() {
-            const requestSeq = ++gpsRequestSeq;
-            const cached = loadCachedGPSLocation();
-
-            // 不再一開始清空為「定位中」：先顯示最後成功位置／目前預設站，GPS 在背景更新。
-            if (cached) {
-                gpsLocation = { lat: cached.lat, lng: cached.lng, name: cached.name };
-                setWeatherLocationLabel(cached.name, '(上次位置)', true);
-            } else {
-                setWeatherLocationLabel(gpsLocation.name || '京士柏', '(更新定位中)', true);
-            }
-
-            if (!navigator.geolocation) {
-                setWeatherLocationLabel(gpsLocation.name || '京士柏', '(GPS不支援)');
-                fetchHKOWeather();
-                return;
-            }
-
-            const finalFallback = (err) => {
-                if (requestSeq !== gpsRequestSeq) return;
-                console.warn('GPS Location unavailable:', err);
-                const last = loadCachedGPSLocation();
-                if (last) {
-                    gpsLocation = { lat: last.lat, lng: last.lng, name: last.name };
-                    setWeatherLocationLabel(last.name, '(上次位置)');
-                } else {
-                    gpsLocation = { lat: 22.3119, lng: 114.1728, name: '京士柏' };
-                    const note = err && err.code === 1 ? '(GPS未授權)' : '(預設)';
-                    setWeatherLocationLabel('京士柏', note);
-                }
-                fetchHKOWeather();
-            };
-
-            // 第一次先取瀏覽器／系統可用的近期位置：通常桌面與室內環境會快很多。
-            navigator.geolocation.getCurrentPosition(
-                (pos) => applyGPSPosition(pos, requestSeq),
-                (fastErr) => {
-                    if (requestSeq !== gpsRequestSeq) return;
-                    if (fastErr && fastErr.code === 1) {
-                        finalFallback(fastErr);
-                        return;
-                    }
-
-                    // 快速定位失敗才嘗試高精度；期間仍顯示舊位置，不會只剩「定位中」。
-                    const currentName = gpsLocation.name || '京士柏';
-                    setWeatherLocationLabel(currentName, '(正更新GPS)', true);
-                    navigator.geolocation.getCurrentPosition(
-                        (pos) => applyGPSPosition(pos, requestSeq),
-                        finalFallback,
-                        { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
-                    );
-                },
-                { enableHighAccuracy: false, timeout: 4500, maximumAge: 600000 }
-            );
-        }
-
-        '''
-
+          block_b64 = 'LyogPT09PT09PT09PT09PT09PT09IEdQUyBHRU9MT0NBVElPTiA9PT09PT09PT09PT09PT09PT0gKi8KICAgICAgICBsZXQgZ3BzUmVxdWVzdFNlcSA9IDA7CiAgICAgICAgY29uc3QgR1BTX0NBQ0hFX0tFWSA9ICdkYXNoYm9hcmRHcHNMYXN0UG9zaXRpb24nOwoKICAgICAgICBmdW5jdGlvbiBmaW5kTmVhcmVzdFdlYXRoZXJTdGF0aW9uKGxhdCwgbG5nKSB7CiAgICAgICAgICAgIGxldCBuZWFyZXN0ID0gd2VhdGhlclN0YXRpb25zWzBdOwogICAgICAgICAgICBsZXQgbWluRGlzdCA9IEluZmluaXR5OwogICAgICAgICAgICB3ZWF0aGVyU3RhdGlvbnMuZm9yRWFjaChzdCA9PiB7CiAgICAgICAgICAgICAgICBjb25zdCBkID0gTWF0aC5oeXBvdChzdC5sYXQgLSBsYXQsIHN0LmxuZyAtIGxuZyk7CiAgICAgICAgICAgICAgICBpZiAoZCA8IG1pbkRpc3QpIHsKICAgICAgICAgICAgICAgICAgICBtaW5EaXN0ID0gZDsKICAgICAgICAgICAgICAgICAgICBuZWFyZXN0ID0gc3Q7CiAgICAgICAgICAgICAgICB9CiAgICAgICAgICAgIH0pOwogICAgICAgICAgICByZXR1cm4gbmVhcmVzdDsKICAgICAgICB9CgogICAgICAgIGZ1bmN0aW9uIHNldFdlYXRoZXJMb2NhdGlvbkxhYmVsKG5hbWUsIG5vdGUgPSAnJywgc3Bpbm5pbmcgPSBmYWxzZSkgewogICAgICAgICAgICBjb25zdCBsb2NMYWJlbCA9IGRvY3VtZW50LmdldEVsZW1lbnRCeUlkKCd3ZWF0aGVyLWxvY2F0aW9uJyk7CiAgICAgICAgICAgIGlmICghbG9jTGFiZWwpIHJldHVybjsKICAgICAgICAgICAgY29uc3QgaWNvbiA9IHNwaW5uaW5nCiAgICAgICAgICAgICAgICA/ICc8aSBjbGFzcz0iZmEtc29saWQgZmEtc3Bpbm5lciBmYS1zcGluIj48L2k+JwogICAgICAgICAgICAgICAgOiAnPGkgY2xhc3M9ImZhLXNvbGlkIGZhLWxvY2F0aW9uLWRvdCI+PC9pPic7CiAgICAgICAgICAgIGxvY0xhYmVsLmlubmVySFRNTCA9IGAke2ljb259ICR7bmFtZX0ke25vdGUgPyBgICR7bm90ZX1gIDogJyd9YDsKICAgICAgICB9CgogICAgICAgIGZ1bmN0aW9uIGxvYWRDYWNoZWRHUFNMb2NhdGlvbigpIHsKICAgICAgICAgICAgdHJ5IHsKICAgICAgICAgICAgICAgIGNvbnN0IGNhY2hlZCA9IEpTT04ucGFyc2UobG9jYWxTdG9yYWdlLmdldEl0ZW0oR1BTX0NBQ0hFX0tFWSkgfHwgJ251bGwnKTsKICAgICAgICAgICAgICAgIGlmICghY2FjaGVkIHx8ICFOdW1iZXIuaXNGaW5pdGUoY2FjaGVkLmxhdCkgfHwgIU51bWJlci5pc0Zpbml0ZShjYWNoZWQubG5nKSB8fCAhY2FjaGVkLm5hbWUpIHJldHVybiBudWxsOwogICAgICAgICAgICAgICAgcmV0dXJuIGNhY2hlZDsKICAgICAgICAgICAgfSBjYXRjaCAoZSkgewogICAgICAgICAgICAgICAgcmV0dXJuIG51bGw7CiAgICAgICAgICAgIH0KICAgICAgICB9CgogICAgICAgIGZ1bmN0aW9uIHNhdmVDYWNoZWRHUFNMb2NhdGlvbihsb2NhdGlvbikgewogICAgICAgICAgICB0cnkgewogICAgICAgICAgICAgICAgbG9jYWxTdG9yYWdlLnNldEl0ZW0oR1BTX0NBQ0hFX0tFWSwgSlNPTi5zdHJpbmdpZnkoeyAuLi5sb2NhdGlvbiwgc2F2ZWRBdDogRGF0ZS5ub3coKSB9KSk7CiAgICAgICAgICAgIH0gY2F0Y2ggKGUpIHt9CiAgICAgICAgfQoKICAgICAgICBmdW5jdGlvbiBhcHBseUdQU1Bvc2l0aW9uKHBvcywgcmVxdWVzdFNlcSkgewogICAgICAgICAgICBpZiAocmVxdWVzdFNlcSAhPT0gZ3BzUmVxdWVzdFNlcSkgcmV0dXJuOwogICAgICAgICAgICBjb25zdCBsYXQgPSBwb3MuY29vcmRzLmxhdGl0dWRlOwogICAgICAgICAgICBjb25zdCBsbmcgPSBwb3MuY29vcmRzLmxvbmdpdHVkZTsKICAgICAgICAgICAgY29uc3QgbmVhcmVzdCA9IGZpbmROZWFyZXN0V2VhdGhlclN0YXRpb24obGF0LCBsbmcpOwogICAgICAgICAgICBncHNMb2NhdGlvbiA9IHsgbGF0LCBsbmcsIG5hbWU6IG5lYXJlc3QubmFtZSB9OwogICAgICAgICAgICBzYXZlQ2FjaGVkR1BTTG9jYXRpb24oZ3BzTG9jYXRpb24pOwogICAgICAgICAgICBzZXRXZWF0aGVyTG9jYXRpb25MYWJlbChuZWFyZXN0Lm5hbWUpOwogICAgICAgICAgICBmZXRjaEhLT1dlYXRoZXIoKTsKICAgICAgICB9CgogICAgICAgIGZ1bmN0aW9uIHJlcXVlc3RHUFNMb2NhdGlvbigpIHsKICAgICAgICAgICAgY29uc3QgcmVxdWVzdFNlcSA9ICsrZ3BzUmVxdWVzdFNlcTsKICAgICAgICAgICAgY29uc3QgY2FjaGVkID0gbG9hZENhY2hlZEdQU0xvY2F0aW9uKCk7CgogICAgICAgICAgICBpZiAoY2FjaGVkKSB7CiAgICAgICAgICAgICAgICBncHNMb2NhdGlvbiA9IHsgbGF0OiBjYWNoZWQubGF0LCBsbmc6IGNhY2hlZC5sbmcsIG5hbWU6IGNhY2hlZC5uYW1lIH07CiAgICAgICAgICAgICAgICBzZXRXZWF0aGVyTG9jYXRpb25MYWJlbChjYWNoZWQubmFtZSwgJyjkuIrmrKHkvY3nva4pJywgdHJ1ZSk7CiAgICAgICAgICAgIH0gZWxzZSB7CiAgICAgICAgICAgICAgICBzZXRXZWF0aGVyTG9jYXRpb25MYWJlbChncHNMb2NhdGlvbi5uYW1lIHx8ICfkuqzlo6vmn48nLCAnKOabtOaWsOWumuS9jeS4rSknLCB0cnVlKTsKICAgICAgICAgICAgfQoKICAgICAgICAgICAgaWYgKCFuYXZpZ2F0b3IuZ2VvbG9jYXRpb24pIHsKICAgICAgICAgICAgICAgIHNldFdlYXRoZXJMb2NhdGlvbkxhYmVsKGdwc0xvY2F0aW9uLm5hbWUgfHwgJ+S6rOWjq+afjycsICcoR1BT5LiN5pSv5o+0KScpOwogICAgICAgICAgICAgICAgZmV0Y2hIS09XZWF0aGVyKCk7CiAgICAgICAgICAgICAgICByZXR1cm47CiAgICAgICAgICAgIH0KCiAgICAgICAgICAgIGNvbnN0IGZpbmFsRmFsbGJhY2sgPSAoZXJyKSA9PiB7CiAgICAgICAgICAgICAgICBpZiAocmVxdWVzdFNlcSAhPT0gZ3BzUmVxdWVzdFNlcSkgcmV0dXJuOwogICAgICAgICAgICAgICAgY29uc29sZS53YXJuKCdHUFMgTG9jYXRpb24gdW5hdmFpbGFibGU6JywgZXJyKTsKICAgICAgICAgICAgICAgIGNvbnN0IGxhc3QgPSBsb2FkQ2FjaGVkR1BTTG9jYXRpb24oKTsKICAgICAgICAgICAgICAgIGlmIChsYXN0KSB7CiAgICAgICAgICAgICAgICAgICAgZ3BzTG9jYXRpb24gPSB7IGxhdDogbGFzdC5sYXQsIGxuZzogbGFzdC5sbmcsIG5hbWU6IGxhc3QubmFtZSB9OwogICAgICAgICAgICAgICAgICAgIHNldFdlYXRoZXJMb2NhdGlvbkxhYmVsKGxhc3QubmFtZSwgJyjkuIrmrKHkvY3nva4pJyk7CiAgICAgICAgICAgICAgICB9IGVsc2UgewogICAgICAgICAgICAgICAgICAgIGdwc0xvY2F0aW9uID0geyBsYXQ6IDIyLjMxMTksIGxuZzogMTE0LjE3MjgsIG5hbWU6ICfkuqzlo6vmn48nIH07CiAgICAgICAgICAgICAgICAgICAgY29uc3Qgbm90ZSA9IGVyciAmJiBlcnIuY29kZSA9PT0gMSA/ICcoR1BT5pyq5o6I5qyKKScgOiAnKOmgkOiorSknOwogICAgICAgICAgICAgICAgICAgIHNldFdlYXRoZXJMb2NhdGlvbkxhYmVsKCfkuqzlo6vmn48nLCBub3RlKTsKICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgICAgIGZldGNoSEtPV2VhdGhlcigpOwogICAgICAgICAgICB9OwoKICAgICAgICAgICAgbmF2aWdhdG9yLmdlb2xvY2F0aW9uLmdldEN1cnJlbnRQb3NpdGlvbigKICAgICAgICAgICAgICAgIChwb3MpID0+IGFwcGx5R1BTUG9zaXRpb24ocG9zLCByZXF1ZXN0U2VxKSwKICAgICAgICAgICAgICAgIChmYXN0RXJyKSA9PiB7CiAgICAgICAgICAgICAgICAgICAgaWYgKHJlcXVlc3RTZXEgIT09IGdwc1JlcXVlc3RTZXEpIHJldHVybjsKICAgICAgICAgICAgICAgICAgICBpZiAoZmFzdEVyciAmJiBmYXN0RXJyLmNvZGUgPT09IDEpIHsKICAgICAgICAgICAgICAgICAgICAgICAgZmluYWxGYWxsYmFjayhmYXN0RXJyKTsKICAgICAgICAgICAgICAgICAgICAgICAgcmV0dXJuOwogICAgICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgICAgICAgICBjb25zdCBjdXJyZW50TmFtZSA9IGdwc0xvY2F0aW9uLm5hbWUgfHwgJ+S6rOWjq+afjyc7CiAgICAgICAgICAgICAgICAgICAgc2V0V2VhdGhlckxvY2F0aW9uTGFiZWwoY3VycmVudE5hbWUsICco5q2j5pu05pawR1BTKScsIHRydWUpOwogICAgICAgICAgICAgICAgICAgIG5hdmlnYXRvci5nZW9sb2NhdGlvbi5nZXRDdXJyZW50UG9zaXRpb24oCiAgICAgICAgICAgICAgICAgICAgICAgIChwb3MpID0+IGFwcGx5R1BTUG9zaXRpb24ocG9zLCByZXF1ZXN0U2VxKSwKICAgICAgICAgICAgICAgICAgICAgICAgZmluYWxGYWxsYmFjaywKICAgICAgICAgICAgICAgICAgICAgICAgeyBlbmFibGVIaWdoQWNjdXJhY3k6IHRydWUsIHRpbWVvdXQ6IDEyMDAwLCBtYXhpbXVtQWdlOiAwIH0KICAgICAgICAgICAgICAgICAgICApOwogICAgICAgICAgICAgICAgfSwKICAgICAgICAgICAgICAgIHsgZW5hYmxlSGlnaEFjY3VyYWN5OiBmYWxzZSwgdGltZW91dDogNDUwMCwgbWF4aW11bUFnZTogNjAwMDAwIH0KICAgICAgICAgICAgKTsKICAgICAgICB9CgogICAgICAgIA=='
+          new_block = base64.b64decode(block_b64).decode('utf-8')
           patched = text[:start] + new_block + text[end:]
           if patched == text:
               raise SystemExit('No change produced')
           path.write_text(patched, encoding='utf-8')
+          PY
 
       - name: Commit patched dashboard
         run: |
