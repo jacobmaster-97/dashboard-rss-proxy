@@ -1,0 +1,66 @@
+name: Patch GPS hard watchdog
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/patch-gps-watchdog.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Add hard GPS watchdog
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('index.html')
+          s = p.read_text(encoding='utf-8')
+
+          if "let gpsHardWatchdog = null;" not in s:
+              s = s.replace(
+                  "let gpsRequestSeq = 0;\n        const GPS_CACHE_KEY",
+                  "let gpsRequestSeq = 0;\n        let gpsHardWatchdog = null;\n        const GPS_CACHE_KEY",
+                  1
+              )
+
+          s = s.replace(
+              "if (requestSeq !== gpsRequestSeq) return;\n            const lat = pos.coords.latitude;",
+              "if (requestSeq !== gpsRequestSeq) return;\n            clearTimeout(gpsHardWatchdog);\n            gpsHardWatchdog = null;\n            const lat = pos.coords.latitude;",
+              1
+          )
+
+          s = s.replace(
+              "const requestSeq = ++gpsRequestSeq;\n            const cached = loadCachedGPSLocation();",
+              "const requestSeq = ++gpsRequestSeq;\n            clearTimeout(gpsHardWatchdog);\n            gpsHardWatchdog = setTimeout(() => {\n                if (requestSeq !== gpsRequestSeq) return;\n                const last = loadCachedGPSLocation();\n                if (last) {\n                    gpsLocation = { lat: last.lat, lng: last.lng, name: last.name };\n                    setWeatherLocationLabel(last.name, '(GPS暫時無回應)');\n                } else {\n                    setWeatherLocationLabel(gpsLocation.name || '京士柏', '(GPS暫時無回應)');\n                }\n                fetchHKOWeather();\n            }, 15000);\n            const cached = loadCachedGPSLocation();",
+              1
+          )
+
+          s = s.replace(
+              "if (requestSeq !== gpsRequestSeq) return;\n                console.warn('GPS Location unavailable:', err);",
+              "if (requestSeq !== gpsRequestSeq) return;\n                clearTimeout(gpsHardWatchdog);\n                gpsHardWatchdog = null;\n                console.warn('GPS Location unavailable:', err);",
+              1
+          )
+
+          p.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Commit dashboard fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          if git diff --cached --quiet; then
+            echo "No changes needed"
+          else
+            git commit -m "Add hard GPS watchdog"
+            git push
+          fi
