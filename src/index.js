@@ -272,13 +272,8 @@ export class MarketStream extends DurableObject {
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === '/market/snapshot') {
-      try {
-        await this.refreshSnapshot();
-        return this.json({ ok: true, quotes: this.quoteList(), updatedAt: Date.now() });
-      } catch (error) {
-        console.error('Market snapshot failed', error);
-        return this.json({ ok: false, error: error.message || 'Market snapshot unavailable.' }, 503);
-      }
+      const snapshot = await this.refreshSnapshot();
+      return this.json({ ok: true, quotes: this.quoteList(), updatedAt: Date.now(), ...snapshot });
     }
     if (url.pathname !== '/market' || request.headers.get('Upgrade') !== 'websocket') return this.json({ ok: false, error: 'Not found.' }, 404);
     const pair = new WebSocketPair();
@@ -301,14 +296,23 @@ export class MarketStream extends DurableObject {
   async refreshSnapshot() {
     const token = this.env.FINNHUB_API_KEY;
     if (!token) throw new Error('FINNHUB_API_KEY is not configured.');
-    await Promise.all(marketSymbols(this.env).map(async symbol => {
+    const now = Date.now();
+    if (this.nextSnapshotAt && now < this.nextSnapshotAt) return { cached: true, rateLimited: this.snapshotRateLimited || false };
+    const results = await Promise.allSettled(marketSymbols(this.env).map(async symbol => {
       const response = await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(token)}`, { headers: { Accept: 'application/json' }, cf: { cacheTtl: 0, cacheEverything: false } });
       if (!response.ok) throw new Error(`Finnhub quote for ${symbol} returned ${response.status}.`);
       const quote = await response.json();
-      if (!Number.isFinite(quote.c) || quote.c === 0) return;
+      if (!Number.isFinite(quote.c) || quote.c === 0) return false;
       const existing = this.quotes.get(symbol);
-      this.quotes.set(symbol, { symbol, price: quote.c, change: Number(quote.d || 0), percent: Number(quote.dp || 0), tradeAt: existing?.tradeAt || Number(quote.t || 0) * 1000 || Date.now() });
+      this.quotes.set(symbol, { symbol, price: quote.c, change: Number(quote.d || 0), percent: Number(quote.dp || 0), tradeAt: existing?.tradeAt || Number(quote.t || 0) * 1000 || now });
+      return true;
     }));
+    const rateLimited = results.some(result => result.status === 'rejected' && /returned 429/.test(result.reason?.message || ''));
+    const refreshed = results.filter(result => result.status === 'fulfilled' && result.value).length;
+    this.snapshotRateLimited = rateLimited;
+    this.nextSnapshotAt = now + (rateLimited ? 60_000 : 15_000);
+    if (rateLimited) console.warn('Finnhub REST quote rate limited; waiting for WebSocket trades.');
+    return { refreshed, rateLimited };
   }
 
   async ensureStarted() {
@@ -317,11 +321,10 @@ export class MarketStream extends DurableObject {
       return;
     }
     try {
-      await this.refreshSnapshot();
-      this.broadcast({ type: 'snapshot', quotes: this.quoteList(), updatedAt: Date.now() });
+      const snapshot = await this.refreshSnapshot();
+      this.broadcast({ type: 'snapshot', quotes: this.quoteList(), updatedAt: Date.now(), ...snapshot });
     } catch (error) {
       console.error('Market snapshot failed', error);
-      this.broadcast({ type: 'error', error: 'Unable to load market snapshot.' });
     }
     this.connectUpstream();
   }
