@@ -5,6 +5,16 @@
   "compatibility_date": "2026-08-31",
   "workers_dev": true,
   "vars": {
-    "ALLOWED_ORIGINS": "*"
-  }
+    "ALLOWED_ORIGINS": "*",
+    "MARKET_SYMBOLS": "MU,VTI"
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "MARKET_STREAM", "class_name": "MarketStream" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["MarketStream"] }
+  ],
+  "observability": { "enabled": true, "head_sampling_rate": 0.1 }
 }
