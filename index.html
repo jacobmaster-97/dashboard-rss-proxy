@@ -341,10 +341,7 @@
                 <div>
                     <h3 class="text-sm font-semibold text-slate-300 mb-2 flex items-center gap-2"><i class="fa-solid fa-chart-line text-emerald-400"></i> 股票設定</h3>
                     <div class="space-y-3">
-                        <div>
-                            <label class="block text-xs text-slate-400 mb-1">Finnhub API Key (選填)</label>
-                            <input type="text" id="setting-finnhub-key" placeholder="輸入 Finnhub API Key" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white focus:border-blue-500 focus:outline-none font-mono">
-                        </div>
+                        <p class="text-xs text-slate-400 leading-relaxed">即時成交由伺服器安全串流，毋須在瀏覽器輸入 Finnhub API Key。只會顯示已於伺服器啟用的股票代碼。</p>
                         <div>
                             <label class="block text-xs text-slate-400 mb-1">股票代碼 (以逗號分隔)</label>
                             <input type="text" id="setting-stocks" placeholder="例如: MU, VTI, AAPL" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-white focus:border-blue-500 focus:outline-none font-mono">
@@ -538,7 +535,6 @@
 
         let userConfig = {
             syncId: '',
-            finnhubApiKey: 'da7rccpr01qj8fm7ttd0da7rccpr01qj8fm7ttdg',
             stocks: ['MU', 'VTI'],
             mtrLine: 'TML',
             mtrSta: 'TIS',
@@ -1030,88 +1026,121 @@
             return '⛅';
         }
 
-        /* ================== STOCK API ================== */
-        async function fetchStockData() {
+        /* ================== REAL-TIME STOCK STREAM ================== */
+        const stockQuotes = new Map();
+        let marketSocket = null;
+        let marketReconnectTimer = null;
+        let marketReconnectAttempt = 0;
+        let stockSnapshotRequest = 0;
+
+        function hongKongTimeParts() {
+            const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Hong_Kong', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date());
+            return Object.fromEntries(parts.filter(p => p.type !== 'literal').map(p => [p.type, Number(p.value)]));
+        }
+
+        function isMarketStreamWindow() {
+            const { hour, minute } = hongKongTimeParts();
+            const current = hour * 60 + minute;
+            return current >= 21 * 60 + 30 || current < 2 * 60;
+        }
+
+        function formatHongKongTime(timestamp) {
+            if (!timestamp) return '等待成交';
+            return new Intl.DateTimeFormat('zh-HK', { timeZone: 'Asia/Hong_Kong', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).format(new Date(timestamp));
+        }
+
+        function setStockStatus(message) {
+            const updateTimeEl = document.getElementById('stock-last-update');
+            if (updateTimeEl) updateTimeEl.textContent = message;
+        }
+
+        function renderStockData() {
             const container = document.getElementById('stock-list-container');
             const badge = document.getElementById('stock-source-badge');
-            const updateTimeEl = document.getElementById('stock-last-update');
             if (!container) return;
+            if (badge) badge.textContent = 'Finnhub 即時串流';
+            const symbols = userConfig.stocks || ['MU', 'VTI'];
+            container.innerHTML = symbols.map(symbol => {
+                const quote = stockQuotes.get(symbol.toUpperCase());
+                if (!quote) return `<div class="bg-slate-900/50 p-2.5 rounded-xl border border-slate-700/50 flex justify-between items-center"><span class="font-bold text-sm text-white">${symbol}</span><span class="text-xs text-slate-500">未有伺服器報價</span></div>`;
+                const change = Number(quote.change || 0);
+                const percent = Number(quote.percent || 0);
+                const isUp = change >= 0;
+                const sign = value => value > 0 ? '+' : '';
+                return `<div class="bg-slate-900/50 p-2.5 rounded-xl border border-slate-700/50 flex justify-between items-center hover:border-emerald-500/40 transition-colors">
+                    <div><div class="font-bold text-sm text-white">${quote.symbol}</div><div class="text-[10px] text-slate-500 mt-0.5">成交：${formatHongKongTime(quote.tradeAt)}</div></div>
+                    <div class="text-right"><div class="text-sm font-bold text-white font-mono">${Number(quote.price).toFixed(2)}</div>
+                    <div class="text-xs ${isUp ? 'text-emerald-400' : 'text-rose-400'} font-mono flex items-center justify-end gap-1"><i class="fa-solid ${isUp ? 'fa-caret-up' : 'fa-caret-down'}"></i><span>${sign(change)}${change.toFixed(2)} (${sign(percent)}${percent.toFixed(2)}%)</span></div></div>
+                </div>`;
+            }).join('');
+        }
 
-            const stocks = userConfig.stocks || ['HSI', '0700.HK', '9988.HK', 'AAPL'];
-            const apiKey = userConfig.finnhubApiKey;
-
-            if (badge) badge.textContent = apiKey ? 'Finnhub API' : '即時報價';
-
+        async function fetchStockSnapshot() {
+            const requestId = ++stockSnapshotRequest;
+            setStockStatus('正在取得最新報價…');
             try {
-                let html = '';
-                for (let symbol of stocks) {
-                    let price = '--';
-                    let change = '--';
-                    let percent = '--';
-                    let isUp = true;
-
-                    if (apiKey) {
-                        try {
-                            let formattedSymbol = symbol;
-                            if (symbol === 'HSI') formattedSymbol = '^HSI';
-                            const data = await safeFetchJson(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(formattedSymbol)}&token=${apiKey}`);
-                            if (data && data.c !== undefined && data.c !== 0) {
-                                price = data.c.toFixed(2);
-                                change = (data.d || 0).toFixed(2);
-                                percent = (data.dp || 0).toFixed(2);
-                                isUp = (data.d || 0) >= 0;
-                            }
-                        } catch(err) {
-                            console.warn(`Stock ${symbol} fetch failed:`, err);
-                        }
-                    }
-
-                    if (price === '--') {
-                        const mockMap = {
-                            'MU': { p: 102.50, c: +2.15, dp: +2.14 },
-                            'VTI': { p: 275.80, c: +1.40, dp: +0.51 },
-                            'HSI': { p: 17820.50, c: +125.30, dp: +0.71 },
-                            '0700.HK': { p: 382.40, c: +4.80, dp: +1.27 },
-                            '9988.HK': { p: 78.60, c: -0.45, dp: -0.57 },
-                            'AAPL': { p: 224.30, c: +1.85, dp: +0.83 }
-                        };
-                        const m = mockMap[symbol.toUpperCase()] || { p: 100.00, c: 1.2, dp: 1.2 };
-                        price = typeof m.p === 'number' ? m.p.toFixed(2) : m.p;
-                        change = (m.c > 0 ? '+' : '') + m.c;
-                        percent = (m.dp > 0 ? '+' : '') + m.dp + '%';
-                        isUp = parseFloat(m.c) >= 0;
-                    } else {
-                        change = (parseFloat(change) >= 0 ? '+' : '') + change;
-                        percent = (parseFloat(percent) >= 0 ? '+' : '') + percent + '%';
-                    }
-
-                    const colorClass = isUp ? 'text-emerald-400' : 'text-rose-400';
-                    const iconClass = isUp ? 'fa-caret-up' : 'fa-caret-down';
-
-                    html += `
-                    <div class="bg-slate-900/50 p-2.5 rounded-xl border border-slate-700/50 flex justify-between items-center hover:border-emerald-500/40 transition-colors">
-                        <div class="font-bold text-sm text-white flex items-center gap-2">
-                            <span>${symbol}</span>
-                        </div>
-                        <div class="text-right">
-                            <div class="text-sm font-bold text-white font-mono">${price}</div>
-                            <div class="text-xs ${colorClass} font-mono flex items-center justify-end gap-1">
-                                <i class="fa-solid ${iconClass}"></i>
-                                <span>${change} (${percent})</span>
-                            </div>
-                        </div>
-                    </div>`;
-                }
-                container.innerHTML = html;
-            } catch (e) {
-                console.error("Stock data fetch error:", e);
-                container.innerHTML = '<div class="text-center py-6 text-slate-500 text-xs">載入股票資訊失敗</div>';
-            } finally {
-                if (updateTimeEl) {
-                    const now = new Date();
-                    updateTimeEl.textContent = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')} 更新`;
-                }
+                const response = await fetch(`${RSS_PROXY_URL}/market/snapshot`, { cache: 'no-store' });
+                const data = await response.json();
+                if (!response.ok || !data.ok) throw new Error(data.error || '快照暫不可用');
+                if (requestId !== stockSnapshotRequest) return;
+                (data.quotes || []).forEach(quote => stockQuotes.set(quote.symbol, quote));
+                renderStockData();
+                setStockStatus(`快照：${formatHongKongTime(data.updatedAt || Date.now())}`);
+            } catch (error) {
+                console.warn('Stock snapshot failed:', error);
+                if (!stockQuotes.size) renderStockData();
+                setStockStatus('報價服務暫不可用');
             }
+        }
+
+        function stopMarketStream(message = '美股時段外，串流已暫停') {
+            clearTimeout(marketReconnectTimer);
+            marketReconnectTimer = null;
+            if (marketSocket) {
+                const socket = marketSocket;
+                marketSocket = null;
+                socket.close(1000, 'Market stream paused');
+            }
+            if (message) setStockStatus(message);
+        }
+
+        function scheduleMarketReconnect() {
+            if (!isMarketStreamWindow() || marketReconnectTimer || marketSocket) return;
+            const delay = Math.min(30000, 1000 * (2 ** marketReconnectAttempt++));
+            setStockStatus(`即時串流重連中（${Math.ceil(delay / 1000)} 秒）`);
+            marketReconnectTimer = setTimeout(() => { marketReconnectTimer = null; startMarketStream(); }, delay);
+        }
+
+        function startMarketStream() {
+            if (!isMarketStreamWindow()) return stopMarketStream();
+            if (marketSocket) return;
+            const socket = new WebSocket(RSS_PROXY_URL.replace(/^http/, 'ws') + '/market');
+            marketSocket = socket;
+            socket.onopen = () => {
+                if (marketSocket !== socket) return;
+                marketReconnectAttempt = 0;
+                setStockStatus('即時成交串流已連接');
+            };
+            socket.onmessage = event => {
+                if (marketSocket !== socket) return;
+                try {
+                    const data = JSON.parse(event.data);
+                    (data.quotes || (data.quote ? [data.quote] : [])).forEach(quote => stockQuotes.set(quote.symbol, quote));
+                    renderStockData();
+                    if (data.type === 'trade') setStockStatus(`最新成交：${formatHongKongTime(data.quote.tradeAt)}`);
+                } catch (error) { console.warn('Invalid market stream message:', error); }
+            };
+            socket.onerror = () => socket.close();
+            socket.onclose = () => {
+                if (marketSocket !== socket) return;
+                marketSocket = null;
+                scheduleMarketReconnect();
+            };
+        }
+
+        async function fetchStockData() {
+            await fetchStockSnapshot();
+            startMarketStream();
         }
 
         /* ================== RSS PROXY CONFIG ================== */
@@ -1735,6 +1764,11 @@
             if (s && s.trim()) {
                 try { userConfig = {...userConfig, ...JSON.parse(s)}; } catch(e){ console.warn("Saved config parse error skipped:", e); }
             }
+            // 金鑰不應留在瀏覽器或同步設定；即時報價改由 Worker Secret 提供。
+            if ('finnhubApiKey' in userConfig) {
+                delete userConfig.finnhubApiKey;
+                localStorage.setItem('dashCfg', JSON.stringify(userConfig));
+            }
 
             if (urlSyncId) {
                 userConfig.syncId = urlSyncId.trim().toUpperCase();
@@ -1753,7 +1787,6 @@
             }
 
             setInputValue('setting-sync-id', userConfig.syncId);
-            setInputValue('setting-finnhub-key', userConfig.finnhubApiKey);
             setInputValue('setting-stocks', userConfig.stocks ? userConfig.stocks.join(', ') : '');
             setInputValue('setting-mtr-line', userConfig.mtrLine);
             
@@ -1768,7 +1801,6 @@
         function saveSettings() {
             const oldSyncId = userConfig.syncId;
             userConfig.syncId = getInputValue('setting-sync-id').toUpperCase();
-            userConfig.finnhubApiKey = getInputValue('setting-finnhub-key');
             
             const stocksVal = getInputValue('setting-stocks');
             userConfig.stocks = stocksVal ? stocksVal.split(',').map(s=>s.trim()).filter(s=>s) : [];
@@ -1824,9 +1856,12 @@
             fetchAllData();
             
             setInterval(fetchHKOWeather, 300000); // 5分鐘
-            setInterval(fetchStockData, 15000);   // 15秒
             setInterval(fetchFootballScores, 60000); // 1分鐘
             setInterval(fetchLiveNews, 1800000);     // 30分鐘（所有 RSS）
+            setInterval(() => {
+                if (isMarketStreamWindow()) startMarketStream();
+                else stopMarketStream();
+            }, 60000);
             
             setInterval(() => {
                 etaCountdown--;
