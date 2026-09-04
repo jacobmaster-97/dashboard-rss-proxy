@@ -1125,6 +1125,10 @@
                 if (marketSocket !== socket) return;
                 try {
                     const data = JSON.parse(event.data);
+                    if (data.type === 'error') {
+                        setStockStatus(data.error === 'Market stream is not configured.' ? '即時報價尚未設定' : '即時報價暫不可用');
+                        return;
+                    }
                     (data.quotes || (data.quote ? [data.quote] : [])).forEach(quote => stockQuotes.set(quote.symbol, quote));
                     renderStockData();
                     if (data.type === 'trade') setStockStatus(`最新成交：${formatHongKongTime(data.quote.tradeAt)}`);
