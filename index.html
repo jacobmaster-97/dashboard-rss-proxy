@@ -1469,6 +1469,23 @@
         }
 
         /* ================== 2. 最新足球比賽比分 (ESPN API) ================== */
+        function formatFootballSchedule(dateInput) {
+            const date = dateInput ? new Date(dateInput) : new Date(NaN);
+            if (Number.isNaN(date.getTime())) return { dateLabel: '日期待定', timeLabel: '時間待定' };
+            const parts = new Intl.DateTimeFormat('en-GB', {
+                timeZone: 'Asia/Hong_Kong', year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+            }).formatToParts(date);
+            const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+            const weekday = new Intl.DateTimeFormat('zh-HK', {
+                timeZone: 'Asia/Hong_Kong', weekday: 'short'
+            }).format(date);
+            return {
+                dateLabel: `${values.year}/${values.month}/${values.day}（${weekday}）`,
+                timeLabel: `${values.hour}:${values.minute}`
+            };
+        }
+
         async function fetchFootballScores() {
             const container = document.getElementById('football-scores-container');
             if (!container) return;
@@ -1506,7 +1523,7 @@
                     container.innerHTML = `
                     <div class="text-center py-8 text-slate-400 text-xs flex flex-col items-center gap-2">
                         <i class="fa-solid fa-calendar-xmark text-2xl text-slate-500 mb-1"></i>
-                        <span>所選聯賽今日暫無比賽</span>
+                        <span>所選聯賽暫無可顯示的賽事</span>
                         <button onclick="resetFootballLeagues()" class="mt-2 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium transition-colors">
                             重置為預設熱門聯賽
                         </button>
@@ -1533,6 +1550,7 @@
                     const statusState = evt.status?.type?.state; // 'pre', 'in', 'post'
                     const statusDetail = evt.status?.type?.shortDetail || evt.status?.type?.detail || '';
                     const displayClock = evt.status?.displayClock;
+                    const schedule = formatFootballSchedule(comp.date || evt.date);
 
                     let statusBadge = '';
                     let scoreText = '';
@@ -1548,8 +1566,7 @@
                         scoreText = `${home.score ?? 0} - ${away.score ?? 0}`;
                     } else {
                         // 未開賽
-                        const gameDate = new Date(evt.date);
-                        const timeStr = isNaN(gameDate) ? '未開賽' : `${String(gameDate.getHours()).padStart(2, '0')}:${String(gameDate.getMinutes()).padStart(2, '0')}`;
+                        const timeStr = schedule.timeLabel;
                         statusBadge = `<span class="px-2 py-0.5 rounded bg-slate-800 text-amber-400 border border-slate-700/80 font-mono text-[10px]"><i class="fa-regular fa-clock mr-1"></i>${timeStr}</span>`;
                         scoreText = `VS`;
                     }
@@ -1559,6 +1576,11 @@
                         <div class="flex justify-between items-center text-[10px] text-slate-400">
                             <span class="truncate max-w-[140px] text-slate-300 font-medium">${evt.leagueDisplayName}</span>
                             ${statusBadge}
+                        </div>
+                        <div class="flex flex-wrap items-center gap-x-1.5 text-[10px] text-slate-400">
+                            <i class="fa-regular fa-calendar" aria-hidden="true"></i>
+                            <span>${schedule.dateLabel}</span>
+                            <span class="text-slate-500">香港時間</span>
                         </div>
                         <div class="flex items-center justify-between text-sm font-bold">
                             <div class="flex items-center gap-2 flex-1 min-w-0">
