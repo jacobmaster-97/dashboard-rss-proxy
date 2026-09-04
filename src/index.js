@@ -256,6 +256,7 @@ export default {
 };
 
 // A single Durable Object keeps one upstream Finnhub subscription for all open dashboards.
+// Runtime secrets are read when each deployed object instance starts.
 export class MarketStream extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
