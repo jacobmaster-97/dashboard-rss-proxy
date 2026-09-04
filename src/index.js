@@ -267,9 +267,18 @@ export class MarketStream extends DurableObject {
     this.upstream = null;
     this.reconnectTimer = null;
     this.upstreamStarting = null;
+    this.ready = this.ctx.blockConcurrencyWhile(async () => {
+      const savedQuotes = await this.ctx.storage.get('last-valid-quotes');
+      if (!Array.isArray(savedQuotes)) return;
+      for (const quote of savedQuotes) {
+        if (!quote?.symbol || !Number.isFinite(quote.price)) continue;
+        this.quotes.set(quote.symbol, { ...quote, isFallback: true, fallbackLabel: '上次有效報價' });
+      }
+    });
   }
 
   async fetch(request) {
+    await this.ready;
     const url = new URL(request.url);
     if (url.pathname === '/market/snapshot') {
       const snapshot = await this.refreshSnapshot();
@@ -302,15 +311,21 @@ export class MarketStream extends DurableObject {
       const response = await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(token)}`, { headers: { Accept: 'application/json' }, cf: { cacheTtl: 0, cacheEverything: false } });
       if (!response.ok) throw new Error(`Finnhub quote for ${symbol} returned ${response.status}.`);
       const quote = await response.json();
-      if (!Number.isFinite(quote.c) || quote.c === 0) return false;
+      const previousClose = Number(quote.pc);
+      const hasLivePrice = Number.isFinite(quote.c) && quote.c !== 0;
+      const hasPreviousClose = Number.isFinite(previousClose) && previousClose !== 0;
+      if (!hasLivePrice && !hasPreviousClose) return false;
       const existing = this.quotes.get(symbol);
-      this.quotes.set(symbol, { symbol, price: quote.c, change: Number(quote.d || 0), percent: Number(quote.dp || 0), tradeAt: existing?.tradeAt || Number(quote.t || 0) * 1000 || now });
+      this.quotes.set(symbol, hasLivePrice
+        ? { symbol, price: quote.c, change: Number(quote.d || 0), percent: Number(quote.dp || 0), previousClose: hasPreviousClose ? previousClose : existing?.previousClose, tradeAt: Number(quote.t || 0) * 1000 || now, isFallback: false }
+        : { ...(existing || {}), symbol, price: previousClose, change: 0, percent: 0, previousClose, isFallback: true, fallbackLabel: '前收市價' });
       return true;
     }));
     const rateLimited = results.some(result => result.status === 'rejected' && /returned 429/.test(result.reason?.message || ''));
     const refreshed = results.filter(result => result.status === 'fulfilled' && result.value).length;
     this.snapshotRateLimited = rateLimited;
     this.nextSnapshotAt = now + (rateLimited ? 60_000 : 15_000);
+    if (refreshed > 0) await this.persistLastValidQuotes();
     if (rateLimited) console.warn('Finnhub REST quote rate limited; waiting for WebSocket trades.');
     return { refreshed, rateLimited };
   }
@@ -335,7 +350,7 @@ export class MarketStream extends DurableObject {
       const upstream = new WebSocket(`wss://ws.finnhub.io?token=${encodeURIComponent(this.env.FINNHUB_API_KEY)}`);
       this.upstream = upstream;
       upstream.addEventListener('open', () => marketSymbols(this.env).forEach(symbol => upstream.send(JSON.stringify({ type: 'subscribe', symbol }))));
-      upstream.addEventListener('message', event => this.handleUpstreamMessage(event.data));
+      upstream.addEventListener('message', event => this.ctx.waitUntil(this.handleUpstreamMessage(event.data)));
       upstream.addEventListener('error', error => console.error('Finnhub WebSocket error', error));
       upstream.addEventListener('close', () => {
         if (this.upstream !== upstream) return;
@@ -349,18 +364,25 @@ export class MarketStream extends DurableObject {
     }).finally(() => { this.upstreamStarting = null; });
   }
 
-  handleUpstreamMessage(raw) {
+  async handleUpstreamMessage(raw) {
     let message;
     try { message = JSON.parse(raw); } catch { return; }
     if (message.type !== 'trade' || !Array.isArray(message.data)) return;
+    let changed = false;
     for (const trade of message.data) {
       const symbol = String(trade.s || '').toUpperCase();
       if (!marketSymbols(this.env).includes(symbol) || !Number.isFinite(trade.p)) continue;
       const previous = this.quotes.get(symbol) || { symbol, change: 0, percent: 0 };
-      const quote = { ...previous, symbol, price: trade.p, tradeAt: Number(trade.t) || Date.now() };
+      const quote = { ...previous, symbol, price: trade.p, tradeAt: Number(trade.t) || Date.now(), isFallback: false, fallbackLabel: undefined };
       this.quotes.set(symbol, quote);
       this.broadcast({ type: 'trade', quote });
+      changed = true;
     }
+    if (changed) await this.persistLastValidQuotes();
+  }
+
+  async persistLastValidQuotes() {
+    await this.ctx.storage.put('last-valid-quotes', this.quoteList().map(({ fallbackLabel, isFallback, ...quote }) => quote));
   }
 
   send(socket, message) { try { socket.send(JSON.stringify(message)); } catch { this.removeClient(socket); } }
