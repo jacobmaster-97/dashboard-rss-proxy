@@ -1,5 +1,11 @@
+import { DurableObject } from 'cloudflare:workers';
+
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 12000;
+
+function marketSymbols(env) {
+  return (env.MARKET_SYMBOLS || 'MU,VTI').split(',').map(symbol => symbol.trim().toUpperCase()).filter(Boolean).slice(0, 20);
+}
 
 function corsHeaders(request, env) {
   const requestOrigin = request.headers.get('Origin');
@@ -156,6 +162,20 @@ export default {
       });
     }
 
+    if (reqUrl.pathname === '/market' || reqUrl.pathname === '/market/snapshot') {
+      if (!env.MARKET_STREAM) {
+        return jsonResponse(request, env, { ok: false, error: 'Market stream is not configured.' }, 503);
+      }
+      if (reqUrl.pathname === '/market' && request.headers.get('Upgrade') !== 'websocket') {
+        return jsonResponse(request, env, { ok: false, error: 'WebSocket upgrade required.' }, 426);
+      }
+      const response = await env.MARKET_STREAM.getByName('dashboard-market-stream-v1').fetch(request);
+      if (reqUrl.pathname === '/market') return response;
+      const headers = new Headers(response.headers);
+      for (const [name, value] of Object.entries(cors)) headers.set(name, value);
+      return new Response(response.body, { status: response.status, headers });
+    }
+
     if (reqUrl.pathname === '/' || reqUrl.pathname === '/health') {
       return jsonResponse(request, env, {
         ok: true,
@@ -234,3 +254,135 @@ export default {
     }
   },
 };
+
+// A single Durable Object keeps one upstream Finnhub subscription for all open dashboards.
+export class MarketStream extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    this.ctx = ctx;
+    this.env = env;
+    this.clients = new Set();
+    this.quotes = new Map();
+    this.upstream = null;
+    this.reconnectTimer = null;
+    this.upstreamStarting = null;
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === '/market/snapshot') {
+      try {
+        await this.refreshSnapshot();
+        return this.json({ ok: true, quotes: this.quoteList(), updatedAt: Date.now() });
+      } catch (error) {
+        console.error('Market snapshot failed', error);
+        return this.json({ ok: false, error: error.message || 'Market snapshot unavailable.' }, 503);
+      }
+    }
+    if (url.pathname !== '/market' || request.headers.get('Upgrade') !== 'websocket') return this.json({ ok: false, error: 'Not found.' }, 404);
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    server.accept();
+    this.clients.add(server);
+    server.addEventListener('close', () => this.removeClient(server));
+    server.addEventListener('error', () => this.removeClient(server));
+    this.send(server, { type: 'snapshot', quotes: this.quoteList(), updatedAt: Date.now() });
+    this.ctx.waitUntil(this.ensureStarted());
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  json(data, status = 200) {
+    return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
+  }
+
+  quoteList() { return [...this.quotes.values()].sort((a, b) => a.symbol.localeCompare(b.symbol)); }
+
+  async refreshSnapshot() {
+    const token = this.env.FINNHUB_API_KEY;
+    if (!token) throw new Error('FINNHUB_API_KEY is not configured.');
+    await Promise.all(marketSymbols(this.env).map(async symbol => {
+      const response = await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(token)}`, { headers: { Accept: 'application/json' }, cf: { cacheTtl: 0, cacheEverything: false } });
+      if (!response.ok) throw new Error(`Finnhub quote for ${symbol} returned ${response.status}.`);
+      const quote = await response.json();
+      if (!Number.isFinite(quote.c) || quote.c === 0) return;
+      const existing = this.quotes.get(symbol);
+      this.quotes.set(symbol, { symbol, price: quote.c, change: Number(quote.d || 0), percent: Number(quote.dp || 0), tradeAt: existing?.tradeAt || Number(quote.t || 0) * 1000 || Date.now() });
+    }));
+  }
+
+  async ensureStarted() {
+    if (!this.env.FINNHUB_API_KEY) {
+      this.broadcast({ type: 'error', error: 'Market stream is not configured.' });
+      return;
+    }
+    try {
+      await this.refreshSnapshot();
+      this.broadcast({ type: 'snapshot', quotes: this.quoteList(), updatedAt: Date.now() });
+    } catch (error) {
+      console.error('Market snapshot failed', error);
+      this.broadcast({ type: 'error', error: 'Unable to load market snapshot.' });
+    }
+    this.connectUpstream();
+  }
+
+  connectUpstream() {
+    if (this.upstream || this.upstreamStarting || this.clients.size === 0) return;
+    this.upstreamStarting = Promise.resolve().then(() => {
+      const upstream = new WebSocket(`wss://ws.finnhub.io?token=${encodeURIComponent(this.env.FINNHUB_API_KEY)}`);
+      this.upstream = upstream;
+      upstream.addEventListener('open', () => marketSymbols(this.env).forEach(symbol => upstream.send(JSON.stringify({ type: 'subscribe', symbol }))));
+      upstream.addEventListener('message', event => this.handleUpstreamMessage(event.data));
+      upstream.addEventListener('error', error => console.error('Finnhub WebSocket error', error));
+      upstream.addEventListener('close', () => {
+        if (this.upstream !== upstream) return;
+        this.upstream = null;
+        this.scheduleReconnect();
+      });
+    }).catch(error => {
+      this.upstream = null;
+      console.error('Unable to connect Finnhub WebSocket', error);
+      this.scheduleReconnect();
+    }).finally(() => { this.upstreamStarting = null; });
+  }
+
+  handleUpstreamMessage(raw) {
+    let message;
+    try { message = JSON.parse(raw); } catch { return; }
+    if (message.type !== 'trade' || !Array.isArray(message.data)) return;
+    for (const trade of message.data) {
+      const symbol = String(trade.s || '').toUpperCase();
+      if (!marketSymbols(this.env).includes(symbol) || !Number.isFinite(trade.p)) continue;
+      const previous = this.quotes.get(symbol) || { symbol, change: 0, percent: 0 };
+      const quote = { ...previous, symbol, price: trade.p, tradeAt: Number(trade.t) || Date.now() };
+      this.quotes.set(symbol, quote);
+      this.broadcast({ type: 'trade', quote });
+    }
+  }
+
+  send(socket, message) { try { socket.send(JSON.stringify(message)); } catch { this.removeClient(socket); } }
+  broadcast(message) { for (const client of this.clients) this.send(client, message); }
+
+  removeClient(client) {
+    this.clients.delete(client);
+    if (this.clients.size === 0) this.ctx.waitUntil(this.ctx.storage.setAlarm(Date.now() + 60_000));
+  }
+
+  async alarm() {
+    if (this.clients.size > 0) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    if (this.upstream) {
+      const upstream = this.upstream;
+      this.upstream = null;
+      try { upstream.close(1000, 'No dashboard clients'); } catch {}
+    }
+  }
+
+  scheduleReconnect() {
+    if (this.clients.size === 0 || this.reconnectTimer) return;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connectUpstream();
+    }, 3000);
+  }
+}
