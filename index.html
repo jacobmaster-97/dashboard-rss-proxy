@@ -155,7 +155,13 @@
             <!-- 最新足球比賽比分 -->
             <section class="grid-card min-h-[300px] flex flex-col">
                 <div class="card-header justify-between">
-                    <div class="flex items-center gap-2"><i class="fa-solid fa-futbol text-emerald-400"></i> 最新足球賽事</div>
+                    <div class="flex items-center gap-2">
+                        <i class="fa-solid fa-futbol text-emerald-400"></i><span>最新足球賽事</span>
+                        <div class="flex items-center gap-1 bg-slate-900/90 p-0.5 rounded-lg border border-slate-700/80 ml-1">
+                            <button id="football-tab-upcoming" onclick="switchFootballCategory('upcoming')" class="px-2 py-0.5 text-xs rounded-md transition-colors font-medium bg-blue-600 text-white shadow-sm">即將進行</button>
+                            <button id="football-tab-finished" onclick="switchFootballCategory('finished')" class="px-2 py-0.5 text-xs rounded-md transition-colors font-medium text-slate-400 hover:text-white">已完場</button>
+                        </div>
+                    </div>
                     <button onclick="fetchFootballScores()" class="hover:text-white text-slate-400 transition-colors" title="重新整理賽事">
                         <i class="fa-solid fa-rotate"></i>
                     </button>
@@ -1520,6 +1526,31 @@
             };
         }
 
+        let footballActiveCategory = 'upcoming';
+        let footballCategoryViews = { upcoming: '', finished: '' };
+
+        function switchFootballCategory(category) {
+            footballActiveCategory = category === 'finished' ? 'finished' : 'upcoming';
+            const upcomingTab = document.getElementById('football-tab-upcoming');
+            const finishedTab = document.getElementById('football-tab-finished');
+            const activeClass = 'px-2 py-0.5 text-xs rounded-md transition-colors font-medium bg-blue-600 text-white shadow-sm';
+            const inactiveClass = 'px-2 py-0.5 text-xs rounded-md transition-colors font-medium text-slate-400 hover:text-white';
+            if (upcomingTab) upcomingTab.className = footballActiveCategory === 'upcoming' ? activeClass : inactiveClass;
+            if (finishedTab) finishedTab.className = footballActiveCategory === 'finished' ? activeClass : inactiveClass;
+            const container = document.getElementById('football-scores-container');
+            if (container && footballCategoryViews[footballActiveCategory]) {
+                container.innerHTML = footballCategoryViews[footballActiveCategory];
+                container.scrollTop = 0;
+            }
+        }
+
+        function updateFootballCategoryLabels(upcomingCount, finishedCount) {
+            const upcomingTab = document.getElementById('football-tab-upcoming');
+            const finishedTab = document.getElementById('football-tab-finished');
+            if (upcomingTab) upcomingTab.innerHTML = `即將進行 <span class="opacity-75">${upcomingCount}</span>`;
+            if (finishedTab) finishedTab.innerHTML = `已完場 <span class="opacity-75">${finishedCount}</span>`;
+        }
+
         function footballScheduleRange() {
             const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
             const values = Object.fromEntries(parts.filter(p => p.type !== 'literal').map(p => [p.type, Number(p.value)]));
@@ -1652,18 +1683,15 @@
                     </div>`;
                 };
 
-                const renderSection = (title, icon, events, emptyText) => `
-                    <div class="pt-1 first:pt-0">
-                        <div class="flex items-center gap-2 px-1 mb-1.5 text-[11px] font-bold ${title === '已完場' ? 'text-slate-400' : 'text-emerald-300'}">
-                            <i class="fa-solid ${icon}"></i><span>${title}</span><span class="text-slate-500 font-normal">${events.length}</span>
-                        </div>
-                        ${events.length ? events.slice(0, 12).map(renderEvent).join('') : `<div class="rounded-lg border border-dashed border-slate-700/70 py-3 text-center text-xs text-slate-500">${emptyText}</div>`}
-                    </div>`;
-
-                container.innerHTML = [
-                    renderSection('即將進行／進行中', 'fa-calendar-days', upcomingEvents, '未來七日暫無賽事'),
-                    renderSection('已完場', 'fa-flag-checkered', finishedEvents, '暫無已完場賽事')
-                ].join('<div class="border-t border-slate-700/50 my-1"></div>');
+                const renderCategory = (events, emptyText) => events.length
+                    ? events.slice(0, 12).map(renderEvent).join('')
+                    : `<div class="rounded-lg border border-dashed border-slate-700/70 py-5 text-center text-xs text-slate-500">${emptyText}</div>`;
+                footballCategoryViews = {
+                    upcoming: renderCategory(upcomingEvents, '未來七日暫無賽事'),
+                    finished: renderCategory(finishedEvents, '暫無已完場賽事')
+                };
+                updateFootballCategoryLabels(upcomingEvents.length, finishedEvents.length);
+                switchFootballCategory(footballActiveCategory);
             } catch (e) {
                 console.error("ESPN Football Fetch Error:", e);
                 container.innerHTML = `<div class="text-center py-6 text-slate-400 text-xs">載入 ESPN 足球賽事失敗</div>`;
