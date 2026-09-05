@@ -1520,6 +1520,15 @@
             };
         }
 
+        function footballScheduleRange() {
+            const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hong_Kong', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+            const values = Object.fromEntries(parts.filter(p => p.type !== 'literal').map(p => [p.type, Number(p.value)]));
+            const start = new Date(Date.UTC(values.year, values.month - 1, values.day));
+            const end = new Date(start.getTime() + 7 * 86400000);
+            const asYmd = date => `${date.getUTCFullYear()}${String(date.getUTCMonth() + 1).padStart(2, '0')}${String(date.getUTCDate()).padStart(2, '0')}`;
+            return `${asYmd(start)}-${asYmd(end)}`;
+        }
+
         async function fetchFootballScores() {
             const container = document.getElementById('football-scores-container');
             if (!container) return;
@@ -1530,17 +1539,18 @@
             }
 
             try {
-                // 並行發送 ESPN API 請求
-                const fetchPromises = selectedLeagues.map(slug => 
-                    safeFetchJson(`https://site.api.espn.com/apis/site/v2/sports/soccer/${slug}/scoreboard`)
-                );
-
-                const results = await Promise.all(fetchPromises);
+                // ESPN 的日期範圍可取得未來七日賽程；同時保留當日 scoreboard 以顯示即場及完場結果。
+                const scheduleRange = footballScheduleRange();
+                const requests = selectedLeagues.flatMap(slug => [
+                    { slug, data: safeFetchJson(`https://site.api.espn.com/apis/site/v2/sports/soccer/${slug}/scoreboard`) },
+                    { slug, data: safeFetchJson(`https://site.api.espn.com/apis/site/v2/sports/soccer/${slug}/scoreboard?dates=${scheduleRange}&limit=100`) }
+                ]);
+                const results = await Promise.all(requests.map(request => request.data));
 
                 let allEvents = [];
                 results.forEach((data, index) => {
                     if (data && data.events && Array.isArray(data.events)) {
-                        const slug = selectedLeagues[index];
+                        const slug = requests[index].slug;
                         const presetObj = PRESET_LEAGUES.find(p => p.slug === slug || p.id === slug);
                         const leagueName = presetObj ? presetObj.name : (data.leagues?.[0]?.abbreviation || data.leagues?.[0]?.name || slug);
                         
@@ -1552,6 +1562,8 @@
                         });
                     }
                 });
+
+                allEvents = [...new Map(allEvents.map(evt => [evt.id, evt])).values()];
 
                 if (allEvents.length === 0) {
                     container.innerHTML = `
@@ -1565,8 +1577,14 @@
                     return;
                 }
 
-                let html = '';
-                allEvents.slice(0, 15).forEach(evt => {
+                const upcomingEvents = allEvents
+                    .filter(evt => !(evt.status?.type?.completed || evt.status?.type?.state === 'post'))
+                    .sort((a, b) => new Date(a.date || a.competitions?.[0]?.date) - new Date(b.date || b.competitions?.[0]?.date));
+                const finishedEvents = allEvents
+                    .filter(evt => evt.status?.type?.completed || evt.status?.type?.state === 'post')
+                    .sort((a, b) => new Date(b.date || b.competitions?.[0]?.date) - new Date(a.date || a.competitions?.[0]?.date));
+
+                const renderEvent = evt => {
                     const comp = evt.competitions?.[0];
                     if (!comp) return;
 
@@ -1605,7 +1623,7 @@
                         scoreText = `VS`;
                     }
 
-                    html += `
+                    return `
                     <div class="bg-slate-900/50 p-2.5 rounded-xl border border-slate-700/50 flex flex-col gap-2 hover:border-emerald-500/40 transition-colors">
                         <div class="flex justify-between items-center text-[10px] text-slate-400">
                             <span class="truncate max-w-[140px] text-slate-300 font-medium">${evt.leagueDisplayName}</span>
@@ -1632,9 +1650,20 @@
                             </div>
                         </div>
                     </div>`;
-                });
+                };
 
-                container.innerHTML = html;
+                const renderSection = (title, icon, events, emptyText) => `
+                    <div class="pt-1 first:pt-0">
+                        <div class="flex items-center gap-2 px-1 mb-1.5 text-[11px] font-bold ${title === '已完場' ? 'text-slate-400' : 'text-emerald-300'}">
+                            <i class="fa-solid ${icon}"></i><span>${title}</span><span class="text-slate-500 font-normal">${events.length}</span>
+                        </div>
+                        ${events.length ? events.slice(0, 12).map(renderEvent).join('') : `<div class="rounded-lg border border-dashed border-slate-700/70 py-3 text-center text-xs text-slate-500">${emptyText}</div>`}
+                    </div>`;
+
+                container.innerHTML = [
+                    renderSection('即將進行／進行中', 'fa-calendar-days', upcomingEvents, '未來七日暫無賽事'),
+                    renderSection('已完場', 'fa-flag-checkered', finishedEvents, '暫無已完場賽事')
+                ].join('<div class="border-t border-slate-700/50 my-1"></div>');
             } catch (e) {
                 console.error("ESPN Football Fetch Error:", e);
                 container.innerHTML = `<div class="text-center py-6 text-slate-400 text-xs">載入 ESPN 足球賽事失敗</div>`;
